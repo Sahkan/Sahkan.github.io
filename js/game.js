@@ -180,6 +180,20 @@ if (shouldShowJoystick()) {
   const jumpButton = document.getElementById('jumpButton');
   const shootButton = document.getElementById('shootButton');
   
+  function handleTouchStart(e, key) {
+    e.preventDefault();
+    e.stopPropagation();
+    keys[key] = true;
+    e.target.classList.add('active');
+  }
+  
+  function handleTouchEnd(e, key) {
+    e.preventDefault();
+    e.stopPropagation();
+    keys[key] = false;
+    e.target.classList.remove('active');
+  }
+  
   // Calculate joystick center and radius
   function updateJoystickBounds() {
     const rect = joystick.getBoundingClientRect();
