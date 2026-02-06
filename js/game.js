@@ -411,8 +411,8 @@ if (shouldShowJoystick()) {
   canvas.addEventListener('touchmove', (e) => {
     if (isDraggingCamera && e.touches.length === 1) {
       const touch = e.touches[0];
-      mouseDeltaX += (touch.clientX - lastTouchX) * 0.5;
-      mouseDeltaY += (touch.clientY - lastTouchY) * 0.5;
+      mouseDeltaX += (touch.clientX - lastTouchX) * 1.5; // Increased sensitivity from 0.5 to 1.5
+      mouseDeltaY += (touch.clientY - lastTouchY) * 1.5; // Increased sensitivity from 0.5 to 1.5
       lastTouchX = touch.clientX;
       lastTouchY = touch.clientY;
       e.preventDefault();
