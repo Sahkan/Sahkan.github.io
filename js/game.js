@@ -150,53 +150,155 @@ const canvas = document.getElementById('canvas');
 const instructions = document.getElementById('instructions');
 
 // Mobile touch controls
+const ENABLE_JOYSTICK_ON_PC = true; // Set to true to show joystick on PC for testing
 let touchControlsActive = false;
 let lastTouchX = 0, lastTouchY = 0;
 let isDraggingCamera = false;
+let joystickActive = false;
+let joystickTouchId = null;
+let joystickCenterX = 0, joystickCenterY = 0;
+let joystickRadius = 0;
+let joystickX = 0, joystickY = 0;
 
 function isMobile() {
   return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 }
 
+function shouldShowJoystick() {
+  return isMobile() || ENABLE_JOYSTICK_ON_PC;
+}
+
 // Initialize mobile controls
-if (isMobile()) {
+if (shouldShowJoystick()) {
   touchControlsActive = true;
-  const dpadUp = document.getElementById('dpadUp');
-  const dpadDown = document.getElementById('dpadDown');
-  const dpadLeft = document.getElementById('dpadLeft');
-  const dpadRight = document.getElementById('dpadRight');
+  const mobileControls = document.getElementById('mobileControls');
+  if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
+    mobileControls.classList.add('force-show');
+  }
+  const joystick = document.getElementById('joystick');
+  const joystickStick = document.getElementById('joystickStick');
   const jumpButton = document.getElementById('jumpButton');
   const shootButton = document.getElementById('shootButton');
   
-  function handleTouchStart(e, key) {
-    e.preventDefault();
-    e.stopPropagation();
-    keys[key] = true;
-    e.target.classList.add('active');
+  // Calculate joystick center and radius
+  function updateJoystickBounds() {
+    const rect = joystick.getBoundingClientRect();
+    joystickCenterX = rect.left + rect.width / 2;
+    joystickCenterY = rect.top + rect.height / 2;
+    joystickRadius = rect.width / 2 - 25; // Half width minus stick radius
+  }
+  updateJoystickBounds();
+  window.addEventListener('resize', updateJoystickBounds);
+  
+  // Joystick touch handlers
+  function updateJoystickPosition(clientX, clientY) {
+    const dx = clientX - joystickCenterX;
+    const dy = clientY - joystickCenterY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    if (distance > joystickRadius) {
+      joystickX = (dx / distance) * joystickRadius;
+      joystickY = (dy / distance) * joystickRadius;
+    } else {
+      joystickX = dx;
+      joystickY = dy;
+    }
+    
+    joystickStick.style.transform = `translate(calc(-50% + ${joystickX}px), calc(-50% + ${joystickY}px))`;
+    
+    // Map joystick position to movement keys
+    const threshold = 0.3; // Dead zone threshold
+    const normalizedX = joystickX / joystickRadius;
+    const normalizedY = joystickY / joystickRadius;
+    
+    keys['KeyW'] = normalizedY < -threshold;
+    keys['KeyS'] = normalizedY > threshold;
+    keys['KeyA'] = normalizedX < -threshold;
+    keys['KeyD'] = normalizedX > threshold;
   }
   
-  function handleTouchEnd(e, key) {
-    e.preventDefault();
-    e.stopPropagation();
-    keys[key] = false;
-    e.target.classList.remove('active');
+  function resetJoystick() {
+    joystickX = 0;
+    joystickY = 0;
+    joystickStick.style.transform = 'translate(-50%, -50%)';
+    joystickStick.classList.remove('active');
+    keys['KeyW'] = false;
+    keys['KeyS'] = false;
+    keys['KeyA'] = false;
+    keys['KeyD'] = false;
+    joystickActive = false;
+    joystickTouchId = null;
   }
   
-  dpadUp.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyW'));
-  dpadUp.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyW'));
-  dpadUp.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyW'));
+  joystick.addEventListener('touchstart', (e) => {
+    if (joystickTouchId === null) {
+      e.preventDefault();
+      e.stopPropagation();
+      joystickTouchId = e.touches[0].identifier;
+      joystickActive = true;
+      joystickStick.classList.add('active');
+      updateJoystickBounds();
+      updateJoystickPosition(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  }, { passive: false });
   
-  dpadDown.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyS'));
-  dpadDown.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyS'));
-  dpadDown.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyS'));
+  joystick.addEventListener('touchmove', (e) => {
+    if (joystickActive && joystickTouchId !== null) {
+      const touch = Array.from(e.touches).find(t => t.identifier === joystickTouchId);
+      if (touch) {
+        e.preventDefault();
+        e.stopPropagation();
+        updateJoystickPosition(touch.clientX, touch.clientY);
+      }
+    }
+  }, { passive: false });
   
-  dpadLeft.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyA'));
-  dpadLeft.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyA'));
-  dpadLeft.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyA'));
+  joystick.addEventListener('touchend', (e) => {
+    if (joystickTouchId !== null) {
+      const touch = Array.from(e.changedTouches).find(t => t.identifier === joystickTouchId);
+      if (touch) {
+        e.preventDefault();
+        e.stopPropagation();
+        resetJoystick();
+      }
+    }
+  }, { passive: false });
   
-  dpadRight.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyD'));
-  dpadRight.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyD'));
-  dpadRight.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyD'));
+  joystick.addEventListener('touchcancel', (e) => {
+    if (joystickTouchId !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      resetJoystick();
+    }
+  }, { passive: false });
+  
+  // Mouse handlers for PC testing
+  if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
+    joystick.addEventListener('mousedown', (e) => {
+      if (e.button === 0) { // Left mouse button
+        e.preventDefault();
+        e.stopPropagation();
+        joystickActive = true;
+        joystickStick.classList.add('active');
+        updateJoystickBounds();
+        updateJoystickPosition(e.clientX, e.clientY);
+      }
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+      if (joystickActive) {
+        e.preventDefault();
+        updateJoystickPosition(e.clientX, e.clientY);
+      }
+    });
+    
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0 && joystickActive) {
+        e.preventDefault();
+        resetJoystick();
+      }
+    });
+  }
   
   jumpButton.addEventListener('touchstart', (e) => handleTouchStart(e, 'Space'));
   jumpButton.addEventListener('touchend', (e) => handleTouchEnd(e, 'Space'));
@@ -219,15 +321,78 @@ if (isMobile()) {
     e.target.classList.remove('active');
   });
   
-  // Camera rotation with touch drag on canvas
+  // Mouse handlers for jump and shoot buttons on PC
+  if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
+    jumpButton.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        e.preventDefault();
+        keys['Space'] = true;
+        e.target.classList.add('active');
+      }
+    });
+    jumpButton.addEventListener('mouseup', (e) => {
+      if (e.button === 0) {
+        e.preventDefault();
+        keys['Space'] = false;
+        e.target.classList.remove('active');
+      }
+    });
+    jumpButton.addEventListener('mouseleave', (e) => {
+      keys['Space'] = false;
+      e.target.classList.remove('active');
+    });
+    
+    shootButton.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        e.preventDefault();
+        shootThisFrame = true;
+        e.target.classList.add('active');
+      }
+    });
+    shootButton.addEventListener('mouseup', (e) => {
+      if (e.button === 0) {
+        e.preventDefault();
+        e.target.classList.remove('active');
+      }
+    });
+    shootButton.addEventListener('mouseleave', (e) => {
+      e.target.classList.remove('active');
+    });
+  }
+  
+  // Camera rotation with touch drag on canvas (only if not touching joystick)
   canvas.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 1) {
+    // Check if touch is on joystick area
+    const joystickRect = joystick.getBoundingClientRect();
+    const touch = e.touches[0];
+    const isOnJoystick = touch.clientX >= joystickRect.left && touch.clientX <= joystickRect.right &&
+                         touch.clientY >= joystickRect.top && touch.clientY <= joystickRect.bottom;
+    
+    if (!isOnJoystick && e.touches.length === 1) {
       isDraggingCamera = true;
-      lastTouchX = e.touches[0].clientX;
-      lastTouchY = e.touches[0].clientY;
+      lastTouchX = touch.clientX;
+      lastTouchY = touch.clientY;
       e.preventDefault();
     }
   }, { passive: false });
+  
+  // Mouse camera drag for PC (only if not using joystick)
+  if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && !joystickActive) { // Left mouse button, not dragging joystick
+        const joystickRect = joystick.getBoundingClientRect();
+        const isOnJoystick = e.clientX >= joystickRect.left && e.clientX <= joystickRect.right &&
+                             e.clientY >= joystickRect.top && e.clientY <= joystickRect.bottom;
+        
+        if (!isOnJoystick) {
+          isDraggingCamera = true;
+          lastTouchX = e.clientX;
+          lastTouchY = e.clientY;
+          canvas.requestPointerLock();
+        }
+      }
+    });
+  }
   
   canvas.addEventListener('touchmove', (e) => {
     if (isDraggingCamera && e.touches.length === 1) {

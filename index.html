@@ -24,48 +24,52 @@
     
     /* Mobile controls */
     #mobileControls { display: none; }
+    #mobileControls.force-show { display: block !important; }
     @media (pointer: coarse), (max-width: 768px) {
       #mobileControls { display: block; }
       #instructions { display: none !important; }
     }
     
-    .dpad {
+    .joystick {
       position: fixed;
       bottom: 20px;
       left: 20px;
-      width: 150px;
-      height: 150px;
+      width: 120px;
+      height: 120px;
       z-index: 100;
       touch-action: none;
     }
-    .dpad-button {
-      position: absolute;
+    .joystick-base {
+      width: 100%;
+      height: 100%;
+      background: rgba(255, 255, 255, 0.2);
+      border: 2px solid rgba(255, 255, 255, 0.4);
+      border-radius: 50%;
+      position: relative;
+    }
+    .joystick-stick {
       width: 50px;
       height: 50px;
-      background: rgba(255, 255, 255, 0.3);
-      border: 2px solid rgba(255, 255, 255, 0.5);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      color: white;
+      background: rgba(255, 255, 255, 0.6);
+      border: 2px solid rgba(255, 255, 255, 0.8);
+      border-radius: 50%;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      transition: transform 0.1s ease-out;
+      touch-action: none;
       user-select: none;
       -webkit-user-select: none;
-      touch-action: none;
     }
-    .dpad-button.active {
-      background: rgba(255, 255, 255, 0.6);
+    .joystick-stick.active {
+      background: rgba(255, 255, 255, 0.9);
     }
-    .dpad-up { top: 0; left: 50px; }
-    .dpad-down { bottom: 0; left: 50px; }
-    .dpad-left { top: 50px; left: 0; }
-    .dpad-right { top: 50px; right: 0; }
     
     #jumpButton {
       position: fixed;
       bottom: 20px;
-      left: 190px;
+      right: 110px;
       width: 60px;
       height: 60px;
       background: rgba(100, 200, 255, 0.5);
@@ -114,11 +118,10 @@
   <div id="instructions">Click to play · WASD move · Mouse look · Space jump · Left-click shoot · ESC unlock</div>
   
   <div id="mobileControls">
-    <div class="dpad">
-      <div class="dpad-button dpad-up" id="dpadUp">↑</div>
-      <div class="dpad-button dpad-down" id="dpadDown">↓</div>
-      <div class="dpad-button dpad-left" id="dpadLeft">←</div>
-      <div class="dpad-button dpad-right" id="dpadRight">→</div>
+    <div class="joystick" id="joystick">
+      <div class="joystick-base">
+        <div class="joystick-stick" id="joystickStick"></div>
+      </div>
     </div>
     <div id="jumpButton">⤴</div>
     <div id="shootButton">●</div>
