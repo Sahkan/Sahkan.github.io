@@ -170,7 +170,7 @@ function shouldShowJoystick() {
 
 // Initialize mobile controls
 if (shouldShowJoystick()) {
-  touchControlsActive = true;
+  touchControlsActive = isMobile(); // Only set to true on actual mobile devices
   const mobileControls = document.getElementById('mobileControls');
   if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
     mobileControls.classList.add('force-show');
@@ -454,13 +454,17 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 document.addEventListener('mousemove', (e) => {
-  if (!isPointerLocked || touchControlsActive) return;
+  if (!isPointerLocked) return;
+  // Only block mouse movement if actually on mobile, not when joystick is enabled for testing on PC
+  if (touchControlsActive && isMobile()) return;
   mouseDeltaX += e.movementX;
   mouseDeltaY += e.movementY;
 });
 
 canvas.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && isPointerLocked && !touchControlsActive) {
+  if (e.button === 0 && isPointerLocked) {
+    // Only block mouse shooting if actually on mobile
+    if (touchControlsActive && isMobile()) return;
     e.preventDefault();
     shootThisFrame = true;
   }
