@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 #define MAX_PROJECTILES 64
-#define NUM_OBSTACLES 100000
+#define NUM_OBSTACLES 8000
 
 void game_init(void);
 void game_update(float dt, unsigned int keys_mask, float mouse_dx, float mouse_dy, int shoot);
@@ -33,6 +33,7 @@ float game_get_obstacle_y(int i);
 float game_get_obstacle_z(int i);
 float game_get_obstacle_rotation(int i);
 unsigned int game_get_obstacle_color(int i);
+int game_get_obstacle_type(int i);
 int game_get_is_moving(void);
 int game_get_is_in_air(void);
 float game_get_run_time(void);

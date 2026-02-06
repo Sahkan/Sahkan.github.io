@@ -18,7 +18,7 @@ let isPointerLocked = false;
 let game_update, game_get_player_position, game_get_player_rotation, game_get_front;
 let game_get_projectile_count, game_get_projectile;
 let game_get_is_moving, game_get_is_in_air, game_get_run_time;
-let game_get_obstacle_count, getObstacleX, getObstacleY, getObstacleZ, getObstacleRotation, getObstacleColor;
+let game_get_obstacle_count, getObstacleX, getObstacleY, getObstacleZ, getObstacleRotation, getObstacleColor, getObstacleType;
 
 // Scene
 const scene = new THREE.Scene();
@@ -32,31 +32,137 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-// Floor (500x500 to match WASM FLOOR_HALF_SIZE 250)
-const floorGeom = new THREE.BoxGeometry(500, 0.5, 500);
-const floorMat = new THREE.MeshLambertMaterial({ color: 0x2d4a2e });
+// Floor (500x500 to match WASM FLOOR_HALF_SIZE 250) – PlaneGeometry for correct UV mapping
+const floorGeom = new THREE.PlaneGeometry(500, 500);
+floorGeom.rotateX(-Math.PI / 2);
+const floorMat = new THREE.MeshLambertMaterial({ color: 0x5a4a42 });
 const floor = new THREE.Mesh(floorGeom, floorMat);
-floor.position.set(0, -0.25, 0);
+floor.position.set(0, 0, 0);
 floor.receiveShadow = true;
 scene.add(floor);
 
-// Obstacles (instanced rendering for performance with 100k cubes)
-const obstacleGeom = new THREE.BoxGeometry(1, 1, 1);
+const floorTextureUrl = new URL('Assets/Textures/BricksWall.png', document.baseURI || window.location.href).href;
+new THREE.TextureLoader().load(
+  floorTextureUrl,
+  (tex) => {
+    console.log('Loaded floor texture:', floorTextureUrl, tex.image?.width, 'x', tex.image?.height);
+    // Ensure correct color and filtering for JPG textures
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    // Tile the texture across the whole 500x500 floor
+    tex.repeat.set(50, 50);
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy?.() ?? 1;
+    floorMat.map = tex;
+    floorMat.color.setHex(0xffffff);
+    // Needed when adding a map to a material that previously had none
+    floorMat.needsUpdate = true;
+  },
+  undefined,
+  (err) => { console.error('Floor texture failed to load:', floorTextureUrl, err); }
+);
+
+// Grass texture for cube obstacles
+const grassTextureUrl = new URL('Assets/Textures/GrassTile.png', document.baseURI || window.location.href).href;
+new THREE.TextureLoader().load(
+  grassTextureUrl,
+  (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 2);
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy?.() ?? 1;
+    obstacleCubeMat.map = tex;
+    obstacleCubeMat.color.setHex(0xffffff);
+    obstacleCubeMat.needsUpdate = true;
+    // Ensure cube instances use white so the texture shows (no tint)
+    if (obstacleCubes && obstacleCubeIndices.length > 0) {
+      const white = new THREE.Color(0xffffff);
+      for (let k = 0; k < obstacleCubeIndices.length; k++) {
+        obstacleCubes.setColorAt(k, white);
+      }
+      if (obstacleCubes.instanceColor) obstacleCubes.instanceColor.needsUpdate = true;
+    }
+  },
+  undefined,
+  (err) => { console.error('Grass texture failed to load:', grassTextureUrl, err); }
+);
+
+// Rock tile texture for triangle obstacles
+const rockTileTextureUrl = new URL('Assets/Textures/RockTile.png', document.baseURI || window.location.href).href;
+new THREE.TextureLoader().load(
+  rockTileTextureUrl,
+  (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(2, 2);
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy?.() ?? 1;
+    obstacleTriangleMat.map = tex;
+    obstacleTriangleMat.color.setHex(0xffffff);
+    obstacleTriangleMat.needsUpdate = true;
+  },
+  undefined,
+  (err) => { console.error('RockTile texture failed to load:', rockTileTextureUrl, err); }
+);
+
+// Obstacles: cubes (0), spheres (1), triangles (2) - each type has its own InstancedMesh
+const OBSTACLE_TYPE_CUBE = 0;
+const OBSTACLE_TYPE_SPHERE = 1;
+const OBSTACLE_TYPE_TRIANGLE = 2;
+
+const obstacleCubeGeom = new THREE.BoxGeometry(1, 1, 1);
+const obstacleSphereGeom = new THREE.SphereGeometry(0.5, 16, 12);
+const obstacleTriangleGeom = new THREE.ConeGeometry(0.5, 1, 3); // Triangular cone (3 radial segments)
 const obstacleMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-let obstacleInstances = null;
-let obstacleCount = 0; // Set in runWithModule, used in gameLoop
-function ensureObstacles(count) {
-  if (obstacleInstances && obstacleCount >= count) return;
-  if (obstacleInstances) {
-    scene.remove(obstacleInstances);
-    obstacleInstances.geometry.dispose();
-    obstacleInstances.material.dispose();
+// Cube obstacles use their own material so we can apply GrassTile.png
+const obstacleCubeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+// Triangle obstacles use their own material so we can apply RockTile.png
+const obstacleTriangleMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+
+let obstacleCubes = null;
+let obstacleSpheres = null;
+let obstacleTriangles = null;
+let obstacleCount = 0;
+let obstacleCubeIndices = [];   // obstacle index -> instance index (for cubes)
+let obstacleSphereIndices = [];
+let obstacleTriangleIndices = [];
+
+function ensureObstaclesByType(getObstacleType, count) {
+  const cubeIndices = [];
+  const sphereIndices = [];
+  const triangleIndices = [];
+  for (let i = 0; i < count; i++) {
+    const t = getObstacleType(i);
+    if (t === OBSTACLE_TYPE_CUBE) cubeIndices.push(i);
+    else if (t === OBSTACLE_TYPE_SPHERE) sphereIndices.push(i);
+    else triangleIndices.push(i);
   }
+  const nCubes = cubeIndices.length;
+  const nSpheres = sphereIndices.length;
+  const nTriangles = triangleIndices.length;
+
+  function disposeMesh(mesh) {
+    if (!mesh) return;
+    scene.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  disposeMesh(obstacleCubes);
+  disposeMesh(obstacleSpheres);
+  disposeMesh(obstacleTriangles);
+
+  obstacleCubes = nCubes > 0 ? new THREE.InstancedMesh(obstacleCubeGeom, obstacleCubeMat, nCubes) : null;
+  obstacleSpheres = nSpheres > 0 ? new THREE.InstancedMesh(obstacleSphereGeom, obstacleMat, nSpheres) : null;
+  obstacleTriangles = nTriangles > 0 ? new THREE.InstancedMesh(obstacleTriangleGeom, obstacleTriangleMat, nTriangles) : null;
+  [obstacleCubes, obstacleSpheres, obstacleTriangles].forEach(m => {
+    if (m) {
+      m.castShadow = true;
+      m.receiveShadow = false;
+      scene.add(m);
+    }
+  });
+  obstacleCubeIndices = cubeIndices;
+  obstacleSphereIndices = sphereIndices;
+  obstacleTriangleIndices = triangleIndices;
   obstacleCount = count;
-  obstacleInstances = new THREE.InstancedMesh(obstacleGeom, obstacleMat, count);
-  obstacleInstances.castShadow = true;
-  obstacleInstances.receiveShadow = false;
-  scene.add(obstacleInstances);
 }
 
 // Character (blocky humanoid)
@@ -567,16 +673,23 @@ function gameLoop() {
   );
   camera.lookAt(px, py, pz);
 
-  // Update obstacle rotations (colors set once at init)
-  if (obstacleInstances && obstacleCount > 0 && getObstacleRotation) {
+  // Update obstacle rotations for all three shape meshes
+  if (obstacleCount > 0 && getObstacleRotation) {
     const matrix = new THREE.Matrix4();
-    for (let i = 0; i < obstacleCount; i++) {
-      const rot = getObstacleRotation(i);
-      matrix.makeRotationZ(rot);
-      matrix.setPosition(getObstacleX(i), getObstacleY(i), getObstacleZ(i));
-      obstacleInstances.setMatrixAt(i, matrix);
+    function updateMesh(mesh, indices) {
+      if (!mesh || !indices.length) return;
+      for (let k = 0; k < indices.length; k++) {
+        const i = indices[k];
+        const rot = getObstacleRotation(i);
+        matrix.makeRotationZ(rot);
+        matrix.setPosition(getObstacleX(i), getObstacleY(i), getObstacleZ(i));
+        mesh.setMatrixAt(k, matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
     }
-    obstacleInstances.instanceMatrix.needsUpdate = true;
+    updateMesh(obstacleCubes, obstacleCubeIndices);
+    updateMesh(obstacleSpheres, obstacleSphereIndices);
+    updateMesh(obstacleTriangles, obstacleTriangleIndices);
   }
 
   renderer.render(scene, camera);
@@ -628,27 +741,40 @@ function gameLoop() {
     getObstacleZ = Module.cwrap('game_get_obstacle_z', 'number', ['number']);
     getObstacleRotation = Module.cwrap('game_get_obstacle_rotation', 'number', ['number']);
     getObstacleColor = Module.cwrap('game_get_obstacle_color', 'number', ['number']);
+    // Optional: only present if WASM was built with obstacle types (cubes/spheres/triangles)
+    const hasObstacleType = typeof Module['_game_get_obstacle_type'] === 'function';
+    getObstacleType = hasObstacleType ? Module.cwrap('game_get_obstacle_type', 'number', ['number']) : null;
 
     Module.ccall('game_init', null, [], []);
     obstacleCount = game_get_obstacle_count();
-    ensureObstacles(obstacleCount);
-    // Set initial colors
-    if (obstacleInstances && getObstacleColor) {
-      const color = new THREE.Color();
-      let sampleColor = null;
-      for (let i = 0; i < obstacleCount; i++) {
-        const colorValue = getObstacleColor(i);
-        // WASM returns unsigned int as 0xRRGGBB, ensure it's treated as unsigned
-        const hexValue = (colorValue >>> 0) & 0xFFFFFF; // Mask to 24-bit RGB
-        color.setHex(hexValue);
-        obstacleInstances.setColorAt(i, color);
-        if (i === 0) sampleColor = hexValue; // Debug: log first color
-      }
-      if (obstacleInstances.instanceColor) {
-        obstacleInstances.instanceColor.needsUpdate = true;
-      }
-      console.log('Set colors for', obstacleCount, 'cubes. Sample color:', '0x' + sampleColor.toString(16));
+    if (getObstacleType) {
+      ensureObstaclesByType(getObstacleType, obstacleCount);
+    } else {
+      // Old WASM build: all obstacles as cubes (single InstancedMesh)
+      ensureObstaclesByType(() => OBSTACLE_TYPE_CUBE, obstacleCount);
     }
+
+    // Set initial colors for each shape mesh
+    const color = new THREE.Color();
+    function setColorsForMesh(mesh, indices) {
+      if (!mesh || !indices.length || !getObstacleColor) return;
+      for (let k = 0; k < indices.length; k++) {
+        const hexValue = (getObstacleColor(indices[k]) >>> 0) & 0xFFFFFF;
+        color.setHex(hexValue);
+        mesh.setColorAt(k, color);
+      }
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+    // Cube obstacles: white instance color so GrassTile texture shows
+    if (obstacleCubes && obstacleCubeIndices.length > 0) {
+      const white = new THREE.Color(0xffffff);
+      for (let k = 0; k < obstacleCubeIndices.length; k++) {
+        obstacleCubes.setColorAt(k, white);
+      }
+      if (obstacleCubes.instanceColor) obstacleCubes.instanceColor.needsUpdate = true;
+    }
+    setColorsForMesh(obstacleSpheres, obstacleSphereIndices);
+    // Triangle obstacles use RockTile texture only (no per-instance color)
     gameLoop();
   }
 })();

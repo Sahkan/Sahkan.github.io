@@ -22,6 +22,8 @@ Then either run `wasm\build.bat` from a shell where you’ve run `emsdk_env.bat`
 
 Build output: `wasm/game.js` and `wasm/game.wasm`. Keep these in the repo (or build in CI) so the game loads.
 
+**Obstacle shapes (cubes, spheres, triangles):** The game can show a mix of shapes only if the WASM module was built with the current build script (which exports `game_get_obstacle_type`). If you only see cubes, rebuild: from the project root, open a terminal, run `emsdk\emsdk_env.bat` (Windows) or `source emsdk/emsdk_env.sh` (Linux/macOS), then run `wasm\build.bat` or `./wasm/build.sh`. Refresh the game to see triangles and spheres.
+
 ## Run locally
 
 Use a local HTTP server (browsers block `file://` for scripts and WASM):

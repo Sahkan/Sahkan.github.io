@@ -18,10 +18,18 @@
 #define PROJECTILE_BOUNCE_COEFFICIENT 0.7f
 #define MAX_PITCH_RAD ((89.f * 3.14159265f) / 180.f)
 
+#define OBSTACLE_TYPE_CUBE    0
+#define OBSTACLE_TYPE_SPHERE  1
+#define OBSTACLE_TYPE_TRIANGLE 2
+#define OBSTACLE_SPHERE_RADIUS 0.5f
+#define OBSTACLE_TRIANGLE_HALF_Y 0.25f
+#define OBSTACLE_PLACEMENT_GAP 0.25f  /* min distance between obstacle surfaces */
+
 typedef struct { float x, y, z; } Vec3;
 typedef struct { float x, y, z, vx, vy, vz; } Projectile;
 
 static Vec3 obstacle_centers[NUM_OBSTACLES];
+static unsigned char obstacle_types[NUM_OBSTACLES]; /* 0=cube, 1=sphere, 2=triangle */
 static float obstacle_rotations[NUM_OBSTACLES];
 static float obstacle_rotation_speeds[NUM_OBSTACLES];
 static unsigned int obstacle_colors[NUM_OBSTACLES]; /* RGB packed as 0xRRGGBB */
@@ -86,6 +94,20 @@ static int sphere_aabb_overlap(float sx, float sy, float sz, float radius,
   return (dx*dx + dy*dy + dz*dz) < (radius * radius);
 }
 
+static int sphere_sphere_overlap(float x1, float y1, float z1, float r1,
+                                 float x2, float y2, float z2, float r2) {
+  float dx = x1 - x2, dy = y1 - y2, dz = z1 - z2;
+  float dist_sq = dx*dx + dy*dy + dz*dz;
+  float sum_r = r1 + r2;
+  return dist_sq < (sum_r * sum_r);
+}
+
+static int aabb_sphere_overlap(float min_x, float min_y, float min_z,
+                               float max_x, float max_y, float max_z,
+                               float sx, float sy, float sz, float radius) {
+  return sphere_aabb_overlap(sx, sy, sz, radius, min_x, min_y, min_z, max_x, max_y, max_z);
+}
+
 static void reflect_velocity_off_normal(float* vx, float* vy, float* vz,
                                        float nx, float ny, float nz, float bounce_coeff) {
   float dot = (*vx) * nx + (*vy) * ny + (*vz) * nz;
@@ -94,16 +116,61 @@ static void reflect_velocity_off_normal(float* vx, float* vy, float* vz,
   *vz = (*vz) - 2.f * dot * nz * bounce_coeff;
 }
 
+static void obstacle_bounds(int i, float* out_min_x, float* out_min_y, float* out_min_z,
+                           float* out_max_x, float* out_max_y, float* out_max_z) {
+  Vec3 c = obstacle_centers[i];
+  int t = (int)obstacle_types[i];
+  if (t == OBSTACLE_TYPE_CUBE) {
+    float o = OBSTACLE_HALF_EXTENT;
+    *out_min_x = c.x - o; *out_min_y = c.y - o; *out_min_z = c.z - o;
+    *out_max_x = c.x + o; *out_max_y = c.y + o; *out_max_z = c.z + o;
+  } else if (t == OBSTACLE_TYPE_SPHERE) {
+    float r = OBSTACLE_SPHERE_RADIUS;
+    *out_min_x = c.x - r; *out_min_y = c.y - r; *out_min_z = c.z - r;
+    *out_max_x = c.x + r; *out_max_y = c.y + r; *out_max_z = c.z + r;
+  } else {
+    float o = OBSTACLE_HALF_EXTENT;
+    float ty = OBSTACLE_TRIANGLE_HALF_Y;
+    *out_min_x = c.x - o; *out_min_y = c.y - ty; *out_min_z = c.z - o;
+    *out_max_x = c.x + o; *out_max_y = c.y + ty; *out_max_z = c.z + o;
+  }
+}
+
+/* Returns 1 if obstacle n (center + type already set) would touch any obstacle with index < n. */
+static int would_new_obstacle_touch_others(int n) {
+  const float margin = OBSTACLE_PLACEMENT_GAP * 0.5f + 1e-4f; /* half-gap + epsilon for float safety */
+  float n_min_x, n_min_y, n_min_z, n_max_x, n_max_y, n_max_z;
+  obstacle_bounds(n, &n_min_x, &n_min_y, &n_min_z, &n_max_x, &n_max_y, &n_max_z);
+  n_min_x -= margin; n_min_y -= margin; n_min_z -= margin;
+  n_max_x += margin; n_max_y += margin; n_max_z += margin;
+  for (int i = 0; i < n; i++) {
+    float i_min_x, i_min_y, i_min_z, i_max_x, i_max_y, i_max_z;
+    obstacle_bounds(i, &i_min_x, &i_min_y, &i_min_z, &i_max_x, &i_max_y, &i_max_z);
+    i_min_x -= margin; i_min_y -= margin; i_min_z -= margin;
+    i_max_x += margin; i_max_y += margin; i_max_z += margin;  /* same margin as above */
+    if (aabb_overlap(n_min_x, n_min_y, n_min_z, n_max_x, n_max_y, n_max_z,
+                     i_min_x, i_min_y, i_min_z, i_max_x, i_max_y, i_max_z))
+      return 1;
+  }
+  return 0;
+}
+
 static int would_overlap_obstacle(float px, float py, float pz) {
   float h = PLAYER_HALF_EXTENT;
   float pmin_x = px - h, pmin_y = py - h, pmin_z = pz - h;
   float pmax_x = px + h, pmax_y = py + h, pmax_z = pz + h;
   for (int i = 0; i < NUM_OBSTACLES; i++) {
     Vec3 c = obstacle_centers[i];
-    float o = OBSTACLE_HALF_EXTENT;
-    if (aabb_overlap(pmin_x, pmin_y, pmin_z, pmax_x, pmax_y, pmax_z,
-                    c.x - o, c.y - o, c.z - o, c.x + o, c.y + o, c.z + o))
-      return 1;
+    int t = (int)obstacle_types[i];
+    if (t == OBSTACLE_TYPE_SPHERE) {
+      if (sphere_aabb_overlap(c.x, c.y, c.z, OBSTACLE_SPHERE_RADIUS,
+                              pmin_x, pmin_y, pmin_z, pmax_x, pmax_y, pmax_z)) return 1;
+    } else {
+      float o_min_x, o_min_y, o_min_z, o_max_x, o_max_y, o_max_z;
+      obstacle_bounds(i, &o_min_x, &o_min_y, &o_min_z, &o_max_x, &o_max_y, &o_max_z);
+      if (aabb_overlap(pmin_x, pmin_y, pmin_z, pmax_x, pmax_y, pmax_z,
+                      o_min_x, o_min_y, o_min_z, o_max_x, o_max_y, o_max_z)) return 1;
+    }
   }
   return 0;
 }
@@ -128,14 +195,22 @@ void game_init(void) {
     const float span = FLOOR_HALF_SIZE - 2.f;
     const float spawn_radius_sq = 36.f;
     int n = 0;
+#define PLACEMENT_MAX_ATTEMPTS 600
     while (n < NUM_OBSTACLES) {
-      float x = rng_float(-span, span);
-      float z = rng_float(-span, span);
-      float dx = x - 0.f, dz = z - 3.f;
-      if (dx * dx + dz * dz < spawn_radius_sq) continue;
-      obstacle_centers[n].x = x;
-      obstacle_centers[n].y = 0.5f;
-      obstacle_centers[n].z = z;
+      int attempts = 0;
+      for (;;) {
+        if (attempts >= PLACEMENT_MAX_ATTEMPTS) break;
+        float x = rng_float(-span, span);
+        float z = rng_float(-span, span);
+        float dx = x - 0.f, dz = z - 3.f;
+        if (dx * dx + dz * dz < spawn_radius_sq) { attempts++; continue; }
+        obstacle_centers[n].x = x;
+        obstacle_centers[n].y = 0.5f;
+        obstacle_centers[n].z = z;
+        obstacle_types[n] = (unsigned char)(rng_next() % 3); /* 0=cube, 1=sphere, 2=triangle */
+        if (!would_new_obstacle_touch_others(n)) break; /* gap OK */
+        attempts++;
+      }
       obstacle_rotations[n] = rng_float(0.f, 6.28318530718f);
       obstacle_rotation_speeds[n] = rng_float(0.5f, 3.f);
       {
@@ -208,17 +283,30 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
   float h = PLAYER_HALF_EXTENT;
   for (int i = 0; i < NUM_OBSTACLES; i++) {
     Vec3 c = obstacle_centers[i];
-    float o = OBSTACLE_HALF_EXTENT;
+    int t = (int)obstacle_types[i];
+    float o_top, o_bottom;
+    if (t == OBSTACLE_TYPE_CUBE) {
+      o_top = c.y + OBSTACLE_HALF_EXTENT;
+      o_bottom = c.y - OBSTACLE_HALF_EXTENT;
+    } else if (t == OBSTACLE_TYPE_SPHERE) {
+      o_top = c.y + OBSTACLE_SPHERE_RADIUS;
+      o_bottom = c.y - OBSTACLE_SPHERE_RADIUS;
+    } else {
+      o_top = c.y + OBSTACLE_TRIANGLE_HALF_Y;
+      o_bottom = c.y - OBSTACLE_TRIANGLE_HALF_Y;
+    }
+    float o_min_x, o_min_y, o_min_z, o_max_x, o_max_y, o_max_z;
+    obstacle_bounds(i, &o_min_x, &o_min_y, &o_min_z, &o_max_x, &o_max_y, &o_max_z);
     if (!aabb_overlap(
           player_position.x - h, player_position.y - h, player_position.z - h,
           player_position.x + h, player_position.y + h, player_position.z + h,
-          c.x - o, c.y - o, c.z - o, c.x + o, c.y + o, c.z + o))
+          o_min_x, o_min_y, o_min_z, o_max_x, o_max_y, o_max_z))
       continue;
     if (velocity_y <= 0.f) {
-      player_position.y = c.y + o + h;
+      player_position.y = o_top + h;
       velocity_y = 0.f;
     } else {
-      float land = (c.y - o - h) > FLOOR_Y ? (c.y - o - h) : FLOOR_Y;
+      float land = (o_bottom - h) > FLOOR_Y ? (o_bottom - h) : FLOOR_Y;
       player_position.y = land;
       velocity_y = 0.f;
     }
@@ -273,32 +361,39 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
     // Obstacle collision and bounce
     for (int j = 0; j < NUM_OBSTACLES && !remove; j++) {
       Vec3 c = obstacle_centers[j];
-      float o = OBSTACLE_HALF_EXTENT;
-      if (sphere_aabb_overlap(p->x, p->y, p->z, pr,
-                              c.x - o, c.y - o, c.z - o,
-                              c.x + o, c.y + o, c.z + o)) {
-        // Calculate collision normal (from obstacle center to projectile)
-        float nx = p->x - c.x, ny = p->y - c.y, nz = p->z - c.z;
-        float len = sqrtf(nx*nx + ny*ny + nz*nz);
-        if (len > 1e-6f) {
-          nx /= len; ny /= len; nz /= len;
-        } else {
-          // If projectile is exactly at center, use up vector
-          nx = 0.f; ny = 1.f; nz = 0.f;
+      int t = (int)obstacle_types[j];
+      int hit = 0;
+      float nx = 0.f, ny = 1.f, nz = 0.f;
+      float o_min_x, o_min_y, o_min_z, o_max_x, o_max_y, o_max_z;
+      obstacle_bounds(j, &o_min_x, &o_min_y, &o_min_z, &o_max_x, &o_max_y, &o_max_z);
+      
+      if (t == OBSTACLE_TYPE_SPHERE) {
+        if (sphere_sphere_overlap(p->x, p->y, p->z, pr, c.x, c.y, c.z, OBSTACLE_SPHERE_RADIUS)) {
+          hit = 1;
+          float dx = p->x - c.x, dy = p->y - c.y, dz = p->z - c.z;
+          float len = sqrtf(dx*dx + dy*dy + dz*dz);
+          if (len > 1e-6f) { nx = dx/len; ny = dy/len; nz = dz/len; }
         }
-        
-        // Move projectile out of obstacle
-        float overlap = pr + o - len;
+      } else {
+        if (sphere_aabb_overlap(p->x, p->y, p->z, pr, o_min_x, o_min_y, o_min_z, o_max_x, o_max_y, o_max_z)) {
+          hit = 1;
+          float dx = p->x - c.x, dy = p->y - c.y, dz = p->z - c.z;
+          float len = sqrtf(dx*dx + dy*dy + dz*dz);
+          if (len > 1e-6f) { nx = dx/len; ny = dy/len; nz = dz/len; }
+        }
+      }
+      
+      if (hit) {
+        float obs_r = (t == OBSTACLE_TYPE_SPHERE) ? OBSTACLE_SPHERE_RADIUS : OBSTACLE_HALF_EXTENT;
+        float dx = p->x - c.x, dy = p->y - c.y, dz = p->z - c.z;
+        float len = sqrtf(dx*dx + dy*dy + dz*dz);
+        float overlap = pr + obs_r - len;
         if (overlap > 0.f && len > 1e-6f) {
           p->x += nx * overlap;
           p->y += ny * overlap;
           p->z += nz * overlap;
         }
-        
-        // Bounce off obstacle
         reflect_velocity_off_normal(&p->vx, &p->vy, &p->vz, nx, ny, nz, PROJECTILE_BOUNCE_COEFFICIENT);
-        
-        // Remove if velocity is too low (projectile has lost too much energy)
         float speed_sq = p->vx*p->vx + p->vy*p->vy + p->vz*p->vz;
         if (speed_sq < 1.f) remove = 1;
       }
@@ -381,6 +476,7 @@ float game_get_obstacle_y(int i) { return (i >= 0 && i < NUM_OBSTACLES) ? obstac
 float game_get_obstacle_z(int i) { return (i >= 0 && i < NUM_OBSTACLES) ? obstacle_centers[i].z : 0.f; }
 float game_get_obstacle_rotation(int i) { return (i >= 0 && i < NUM_OBSTACLES) ? obstacle_rotations[i] : 0.f; }
 unsigned int game_get_obstacle_color(int i) { return (i >= 0 && i < NUM_OBSTACLES) ? obstacle_colors[i] : 0x808080; }
+int game_get_obstacle_type(int i) { return (i >= 0 && i < NUM_OBSTACLES) ? (int)obstacle_types[i] : 0; }
 
 int game_get_is_moving(void) { return is_moving; }
 int game_get_is_in_air(void) { return is_in_air; }
