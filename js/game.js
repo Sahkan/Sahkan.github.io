@@ -9,7 +9,9 @@ const PROJECTILE_RADIUS = 0.15;
 // Input state (for WASM)
 const keys = {};
 let mouseDeltaX = 0, mouseDeltaY = 0;
-let shootThisFrame = false;
+let isShooting = false; // Track if shoot button is held down
+let shootCooldown = 0; // Cooldown timer between shots
+const SHOOT_COOLDOWN_TIME = 0.05; // Seconds between shots (3x faster: was 0.15)
 let isPointerLocked = false;
 
 // WASM module and wrappers (set after load)
@@ -321,17 +323,19 @@ if (shouldShowJoystick()) {
   shootButton.addEventListener('touchstart', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    shootThisFrame = true;
+    isShooting = true;
     e.target.classList.add('active');
   });
   shootButton.addEventListener('touchend', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    isShooting = false;
     e.target.classList.remove('active');
   });
   shootButton.addEventListener('touchcancel', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    isShooting = false;
     e.target.classList.remove('active');
   });
   
@@ -359,17 +363,19 @@ if (shouldShowJoystick()) {
     shootButton.addEventListener('mousedown', (e) => {
       if (e.button === 0) {
         e.preventDefault();
-        shootThisFrame = true;
+        isShooting = true;
         e.target.classList.add('active');
       }
     });
     shootButton.addEventListener('mouseup', (e) => {
       if (e.button === 0) {
         e.preventDefault();
+        isShooting = false;
         e.target.classList.remove('active');
       }
     });
     shootButton.addEventListener('mouseleave', (e) => {
+      isShooting = false;
       e.target.classList.remove('active');
     });
   }
@@ -466,7 +472,13 @@ canvas.addEventListener('mousedown', (e) => {
     // Only block mouse shooting if actually on mobile
     if (touchControlsActive && isMobile()) return;
     e.preventDefault();
-    shootThisFrame = true;
+    isShooting = true;
+  }
+});
+canvas.addEventListener('mouseup', (e) => {
+  if (e.button === 0 && isPointerLocked) {
+    if (touchControlsActive && isMobile()) return;
+    isShooting = false;
   }
 });
 
@@ -495,10 +507,22 @@ function gameLoop() {
 
   const dt = Math.min(clock.getDelta(), 0.1);
   const keysMask = getKeysMask();
-  game_update(dt, keysMask, mouseDeltaX, mouseDeltaY, shootThisFrame ? 1 : 0);
+  
+  // Handle automatic shooting with cooldown
+  let shouldShoot = false;
+  if (isShooting) {
+    shootCooldown -= dt;
+    if (shootCooldown <= 0) {
+      shouldShoot = true;
+      shootCooldown = SHOOT_COOLDOWN_TIME; // Reset cooldown
+    }
+  } else {
+    shootCooldown = 0; // Reset cooldown when not shooting
+  }
+  
+  game_update(dt, keysMask, mouseDeltaX, mouseDeltaY, shouldShoot ? 1 : 0);
   mouseDeltaX = 0;
   mouseDeltaY = 0;
-  shootThisFrame = false;
 
   const px = game_get_player_position(0);
   const py = game_get_player_position(1);

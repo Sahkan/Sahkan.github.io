@@ -15,6 +15,7 @@
 #define PROJECTILE_SPEED 25.f
 #define PROJECTILE_RADIUS 0.15f
 #define PROJECTILE_MAX_DIST 50.f
+#define PROJECTILE_BOUNCE_COEFFICIENT 0.7f
 #define MAX_PITCH_RAD ((89.f * 3.14159265f) / 180.f)
 
 typedef struct { float x, y, z; } Vec3;
@@ -73,6 +74,24 @@ static int aabb_overlap(float min_ax, float min_ay, float min_az,
   return min_ax < max_bx && max_ax > min_bx &&
          min_ay < max_by && max_ay > min_by &&
          min_az < max_bz && max_az > min_bz;
+}
+
+static int sphere_aabb_overlap(float sx, float sy, float sz, float radius,
+                               float min_x, float min_y, float min_z,
+                               float max_x, float max_y, float max_z) {
+  float closest_x = sx < min_x ? min_x : (sx > max_x ? max_x : sx);
+  float closest_y = sy < min_y ? min_y : (sy > max_y ? max_y : sy);
+  float closest_z = sz < min_z ? min_z : (sz > max_z ? max_z : sz);
+  float dx = sx - closest_x, dy = sy - closest_y, dz = sz - closest_z;
+  return (dx*dx + dy*dy + dz*dz) < (radius * radius);
+}
+
+static void reflect_velocity_off_normal(float* vx, float* vy, float* vz,
+                                       float nx, float ny, float nz, float bounce_coeff) {
+  float dot = (*vx) * nx + (*vy) * ny + (*vz) * nz;
+  *vx = (*vx) - 2.f * dot * nx * bounce_coeff;
+  *vy = (*vy) - 2.f * dot * ny * bounce_coeff;
+  *vz = (*vz) - 2.f * dot * nz * bounce_coeff;
 }
 
 static int would_overlap_obstacle(float px, float py, float pz) {
@@ -237,16 +256,54 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
     int remove = 0;
     float dx = p->x - player_position.x, dy = p->y - player_position.y, dz = p->z - player_position.z;
     if (dx*dx + dy*dy + dz*dz > PROJECTILE_MAX_DIST * PROJECTILE_MAX_DIST) remove = 1;
-    if (p->y < -5.f) remove = 1;
+    if (p->y < -10.f) remove = 1; // Remove if too far below floor
+    
     float pr = PROJECTILE_RADIUS;
+    float floor_top = 0.25f; // Floor top surface (floor center Y is -0.25, half height 0.25, so top is 0)
+    
+    // Floor collision and bounce
+    if (p->y - pr < floor_top) {
+      p->y = floor_top + pr; // Move projectile above floor
+      p->vy = -p->vy * PROJECTILE_BOUNCE_COEFFICIENT; // Bounce with energy loss
+      // Small friction on floor
+      p->vx *= 0.95f;
+      p->vz *= 0.95f;
+    }
+    
+    // Obstacle collision and bounce
     for (int j = 0; j < NUM_OBSTACLES && !remove; j++) {
       Vec3 c = obstacle_centers[j];
       float o = OBSTACLE_HALF_EXTENT;
-      if (aabb_overlap(
-            p->x - pr, p->y - pr, p->z - pr, p->x + pr, p->y + pr, p->z + pr,
-            c.x - o, c.y - o, c.z - o, c.x + o, c.y + o, c.z + o))
-        remove = 1;
+      if (sphere_aabb_overlap(p->x, p->y, p->z, pr,
+                              c.x - o, c.y - o, c.z - o,
+                              c.x + o, c.y + o, c.z + o)) {
+        // Calculate collision normal (from obstacle center to projectile)
+        float nx = p->x - c.x, ny = p->y - c.y, nz = p->z - c.z;
+        float len = sqrtf(nx*nx + ny*ny + nz*nz);
+        if (len > 1e-6f) {
+          nx /= len; ny /= len; nz /= len;
+        } else {
+          // If projectile is exactly at center, use up vector
+          nx = 0.f; ny = 1.f; nz = 0.f;
+        }
+        
+        // Move projectile out of obstacle
+        float overlap = pr + o - len;
+        if (overlap > 0.f && len > 1e-6f) {
+          p->x += nx * overlap;
+          p->y += ny * overlap;
+          p->z += nz * overlap;
+        }
+        
+        // Bounce off obstacle
+        reflect_velocity_off_normal(&p->vx, &p->vy, &p->vz, nx, ny, nz, PROJECTILE_BOUNCE_COEFFICIENT);
+        
+        // Remove if velocity is too low (projectile has lost too much energy)
+        float speed_sq = p->vx*p->vx + p->vy*p->vy + p->vz*p->vz;
+        if (speed_sq < 1.f) remove = 1;
+      }
     }
+    
     if (remove) {
       projectiles[i] = projectiles[--projectile_count];
     }
