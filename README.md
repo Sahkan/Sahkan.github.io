@@ -1,24 +1,30 @@
-# Cube Game – Web
+# Cube Game – Web (WebAssembly)
 
-A 3D browser game built with Three.js. Move around, jump, and shoot in a simple blocky world.
+A 3D browser game with **core logic in WebAssembly** (C, compiled via Emscripten) and **Three.js** for rendering. Move around, jump, and shoot in a simple blocky world.
 
-## GitHub Pages
+## Build (required)
 
-This repo is set up to run on **GitHub Pages** as a static site.
+The game logic runs in WebAssembly. You must build the WASM module once before running the game.
 
-1. Push this repository to GitHub.
-2. Open the repo on GitHub → **Settings** → **Pages**.
-3. Under **Build and deployment**, set **Source** to **Deploy from a branch**.
-4. Choose your default branch (e.g. `main`) and folder **/ (root)**.
-5. Click **Save**. After a minute or two, the site will be at:
-   - **https://\<your-username\>.github.io/\<repo-name\>/**  
-   (e.g. `https://myuser.github.io/CursorProjectTest4/`)
+**Option A – Emscripten already installed:**  
+From the project root run `wasm\build.bat` (Windows) or `./wasm/build.sh` (Linux/macOS).
 
-No build step is required; the site is plain HTML and JS.
+**Option B – Install Emscripten in this project (one-time):**
+
+```bash
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+emsdk install latest
+emsdk activate latest
+```
+
+Then either run `wasm\build.bat` from a shell where you’ve run `emsdk_env.bat` (Windows), or use the full path to `emsdk\upstream\emscripten\emcc.bat` when building.
+
+Build output: `wasm/game.js` and `wasm/game.wasm`. Keep these in the repo (or build in CI) so the game loads.
 
 ## Run locally
 
-Use a local HTTP server (some browsers block `file://` for scripts):
+Use a local HTTP server (browsers block `file://` for scripts and WASM):
 
 ```bash
 npx serve .
@@ -26,7 +32,16 @@ npx serve .
 
 Then open http://localhost:3000 (or the URL shown).
 
-Or from the project root: `python -m http.server 8080` and open http://localhost:8080.
+Or: `python -m http.server 8080` and open http://localhost:8080.
+
+## GitHub Pages
+
+1. Build the WASM module (see above) and commit `wasm/game.js` and `wasm/game.wasm`.
+2. Push the repo to GitHub → **Settings** → **Pages**.
+3. Set **Source** to **Deploy from a branch**, branch e.g. `main`, folder **/ (root)**.
+4. The site will be at **https://\<your-username\>.github.io/\<repo-name\>/**.
+
+Ensure `wasm/game.js` and `wasm/game.wasm` are deployed (not in `.gitignore`).
 
 ## Controls
 
@@ -39,5 +54,6 @@ Or from the project root: `python -m http.server 8080` and open http://localhost
 
 ## Tech
 
-- **Three.js** (WebGL) for 3D
-- Plain JavaScript, no build step
+- **WebAssembly** – Game logic (movement, physics, collision, projectiles) in C, built with Emscripten.
+- **Three.js** (WebGL) – 3D scene, camera, character and projectile meshes, rendering.
+- **JavaScript** – Loads the WASM module, handles input, and syncs WASM state to Three.js each frame.

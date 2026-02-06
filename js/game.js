@@ -1,36 +1,24 @@
 /* global THREE */
-// --- Constants (match C# game) ---
-const MOVE_SPEED = 5;
-const MOUSE_SENSITIVITY = 0.002;
+// Cube Game – WebAssembly core with Three.js rendering
+
 const CAMERA_DISTANCE = 4;
 const CAMERA_HEIGHT = 1.5;
-const PLAYER_HALF_EXTENT = 0.5;
-const FLOOR_HALF_SIZE = 10;
-const GRAVITY = 18;
-const JUMP_SPEED = 8;
-const FLOOR_Y = 0.5;
-const OBSTACLE_HALF_EXTENT = 0.5;
-const OBSTACLE_CENTERS = [
-  new THREE.Vector3(4, 0.5, 2),
-  new THREE.Vector3(-3, 0.5, -1),
-  new THREE.Vector3(0, 0.5, -5),
-];
 const RUN_CYCLE_DURATION = 0.4;
-const PROJECTILE_SPEED = 25;
 const PROJECTILE_RADIUS = 0.15;
-const PROJECTILE_MAX_DIST = 50;
 
-// --- State ---
-const playerPosition = new THREE.Vector3(0, 0.5, 3);
-let yaw = 0, pitch = 0;
-let velocityY = 0;
-let isMoving = false, isInAir = false;
-let runTime = 0;
+// Input state (for WASM)
 const keys = {};
+let mouseDeltaX = 0, mouseDeltaY = 0;
+let shootThisFrame = false;
 let isPointerLocked = false;
-const projectiles = []; // { mesh: THREE.Mesh, velocity: THREE.Vector3 }
 
-// --- Scene ---
+// WASM module and wrappers (set after load)
+let game_update, game_get_player_position, game_get_player_rotation, game_get_front;
+let game_get_projectile_count, game_get_projectile;
+let game_get_is_moving, game_get_is_in_air, game_get_run_time;
+let game_get_obstacle_count, getObstacleX, getObstacleY, getObstacleZ, getObstacleRotation, getObstacleColor;
+
+// Scene
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0.2, 0.3, 0.4);
 
@@ -42,76 +30,73 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-// --- Floor ---
-const floorGeom = new THREE.BoxGeometry(20, 0.5, 20);
+// Floor (500x500 to match WASM FLOOR_HALF_SIZE 250)
+const floorGeom = new THREE.BoxGeometry(500, 0.5, 500);
 const floorMat = new THREE.MeshLambertMaterial({ color: 0x2d4a2e });
 const floor = new THREE.Mesh(floorGeom, floorMat);
 floor.position.set(0, -0.25, 0);
 floor.receiveShadow = true;
 scene.add(floor);
 
-// --- Obstacles ---
-const obstacleMat = [
-  new THREE.MeshLambertMaterial({ color: 0xcc4d33 }),
-  new THREE.MeshLambertMaterial({ color: 0xe6b333 }),
-  new THREE.MeshLambertMaterial({ color: 0x4dcc66 }),
-];
-OBSTACLE_CENTERS.forEach((pos, i) => {
-  const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), obstacleMat[i]);
-  box.position.copy(pos);
-  box.castShadow = true;
-  scene.add(box);
-});
+// Obstacles (instanced rendering for performance with 100k cubes)
+const obstacleGeom = new THREE.BoxGeometry(1, 1, 1);
+const obstacleMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+let obstacleInstances = null;
+let obstacleCount = 0; // Set in runWithModule, used in gameLoop
+function ensureObstacles(count) {
+  if (obstacleInstances && obstacleCount >= count) return;
+  if (obstacleInstances) {
+    scene.remove(obstacleInstances);
+    obstacleInstances.geometry.dispose();
+    obstacleInstances.material.dispose();
+  }
+  obstacleCount = count;
+  obstacleInstances = new THREE.InstancedMesh(obstacleGeom, obstacleMat, count);
+  obstacleInstances.castShadow = true;
+  obstacleInstances.receiveShadow = false;
+  scene.add(obstacleInstances);
+}
 
-// --- Character (simple blocky humanoid) ---
-const charColor = new THREE.Color(0.35, 0.55, 0.9);
-const charMat = new THREE.MeshLambertMaterial({ color: charColor });
+// Character (blocky humanoid)
+const charMat = new THREE.MeshLambertMaterial({ color: 0x5999ff });
 const skinMat = new THREE.MeshLambertMaterial({ color: 0xf2d9c4 });
-
 function makeBox(w, h, d) {
   return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), charMat);
 }
-
 const character = new THREE.Group();
 const torso = makeBox(0.35, 0.4, 0.2);
 torso.position.set(0, 0.9, 0);
 character.add(torso);
-
 const head = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.25), skinMat);
 head.position.set(0, 0.25, 0);
 torso.add(head);
-
 const lUpperLeg = makeBox(0.1, 0.35, 0.1);
 lUpperLeg.position.set(-0.12, 0.35, 0);
 character.add(lUpperLeg);
 const lLowerLeg = makeBox(0.08, 0.35, 0.08);
 lLowerLeg.position.set(0, -0.35, 0);
 lUpperLeg.add(lLowerLeg);
-
 const rUpperLeg = makeBox(0.1, 0.35, 0.1);
 rUpperLeg.position.set(0.12, 0.35, 0);
 character.add(rUpperLeg);
 const rLowerLeg = makeBox(0.08, 0.35, 0.08);
 rLowerLeg.position.set(0, -0.35, 0);
 rUpperLeg.add(rLowerLeg);
-
 const lUpperArm = makeBox(0.06, 0.25, 0.06);
 lUpperArm.position.set(-0.2, 0.2, 0);
 torso.add(lUpperArm);
 const lLowerArm = makeBox(0.05, 0.25, 0.05);
 lLowerArm.position.set(0, -0.25, 0);
 lUpperArm.add(lLowerArm);
-
 const rUpperArm = makeBox(0.06, 0.25, 0.06);
 rUpperArm.position.set(0.2, 0.2, 0);
 torso.add(rUpperArm);
 const rLowerArm = makeBox(0.05, 0.25, 0.05);
 rLowerArm.position.set(0, -0.25, 0);
 rUpperArm.add(rLowerArm);
-
 scene.add(character);
 
-// --- Lights ---
+// Lights
 const ambient = new THREE.AmbientLight(0x404060);
 scene.add(ambient);
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -120,74 +105,19 @@ dirLight.castShadow = true;
 dirLight.shadow.mapSize.set(2048, 2048);
 dirLight.shadow.camera.near = 0.5;
 dirLight.shadow.camera.far = 50;
-dirLight.shadow.camera.left = -15;
-dirLight.shadow.camera.right = 15;
-dirLight.shadow.camera.top = 15;
-dirLight.shadow.camera.bottom = -15;
+dirLight.shadow.camera.left = -280;
+dirLight.shadow.camera.right = 280;
+dirLight.shadow.camera.top = 280;
+dirLight.shadow.camera.bottom = -280;
+dirLight.shadow.camera.far = 500;
 scene.add(dirLight);
 
-// --- Projectiles (shared geometry/material) ---
+// Projectiles: list of Three.js meshes (count/layout driven by WASM)
 const projectileGeom = new THREE.SphereGeometry(PROJECTILE_RADIUS, 8, 6);
 const projectileMat = new THREE.MeshLambertMaterial({ color: 0xffff00 });
+const projectileMeshes = [];
 
-function shoot() {
-  const front = getFront();
-  const mesh = new THREE.Mesh(projectileGeom, projectileMat);
-  mesh.position.copy(playerPosition);
-  const velocity = front.clone().multiplyScalar(PROJECTILE_SPEED);
-  scene.add(mesh);
-  projectiles.push({ mesh, velocity });
-}
-
-function getProjectileAABB(center) {
-  const r = PROJECTILE_RADIUS;
-  return {
-    min: new THREE.Vector3(center.x - r, center.y - r, center.z - r),
-    max: new THREE.Vector3(center.x + r, center.y + r, center.z + r),
-  };
-}
-
-// --- Helpers ---
-function getFront() {
-  return new THREE.Vector3(
-    Math.cos(pitch) * Math.sin(yaw),
-    Math.sin(pitch),
-    Math.cos(pitch) * Math.cos(yaw)
-  ).normalize();
-}
-
-function getPlayerAABB(center) {
-  const h = PLAYER_HALF_EXTENT;
-  return {
-    min: new THREE.Vector3(center.x - h, center.y - h, center.z - h),
-    max: new THREE.Vector3(center.x + h, center.y + h, center.z + h),
-  };
-}
-
-function getObstacleAABB(center) {
-  const h = OBSTACLE_HALF_EXTENT;
-  return {
-    min: new THREE.Vector3(center.x - h, center.y - h, center.z - h),
-    max: new THREE.Vector3(center.x + h, center.y + h, center.z + h),
-  };
-}
-
-function aabbOverlap(a, b) {
-  return a.min.x < b.max.x && a.max.x > b.min.x &&
-    a.min.y < b.max.y && a.max.y > b.min.y &&
-    a.min.z < b.max.z && a.max.z > b.min.z;
-}
-
-function wouldOverlapObstacle(center) {
-  const playerBox = getPlayerAABB(center);
-  for (const c of OBSTACLE_CENTERS) {
-    if (aabbOverlap(playerBox, getObstacleAABB(c))) return true;
-  }
-  return false;
-}
-
-function updateCharacterAnimation(dt) {
-  if (isMoving && !isInAir) runTime += dt;
+function updateCharacterAnimation(isMoving, isInAir, runTime) {
   const phase = ((runTime % RUN_CYCLE_DURATION) / RUN_CYCLE_DURATION) * Math.PI * 2;
   const s = Math.sin(phase);
 
@@ -215,20 +145,11 @@ function updateCharacterAnimation(dt) {
   }
 }
 
-// --- Input ---
+// Input
 const canvas = document.getElementById('canvas');
 const instructions = document.getElementById('instructions');
 
-canvas.addEventListener('click', () => {
-  canvas.requestPointerLock();
-});
-
-canvas.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && isPointerLocked) {
-    e.preventDefault();
-    shoot();
-  }
-});
+canvas.addEventListener('click', () => canvas.requestPointerLock());
 
 document.addEventListener('pointerlockchange', () => {
   isPointerLocked = document.pointerLockElement === canvas;
@@ -240,15 +161,19 @@ document.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'Escape') document.exitPointerLock();
 });
-
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 document.addEventListener('mousemove', (e) => {
   if (!isPointerLocked) return;
-  yaw -= e.movementX * MOUSE_SENSITIVITY;
-  pitch -= e.movementY * MOUSE_SENSITIVITY;
-  const maxPitch = (89 * Math.PI) / 180;
-  pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
+  mouseDeltaX += e.movementX;
+  mouseDeltaY += e.movementY;
+});
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 0 && isPointerLocked) {
+    e.preventDefault();
+    shootThisFrame = true;
+  }
 });
 
 window.addEventListener('resize', () => {
@@ -257,100 +182,155 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// --- Update ---
-const clock = new THREE.Clock();
-
-function update() {
-  const dt = Math.min(clock.getDelta(), 0.1);
-
-  const front = getFront();
-  const frontXZ = new THREE.Vector3(front.x, 0, front.z).normalize();
-  if (frontXZ.lengthSq() < 1e-6) frontXZ.set(0, 0, -1);
-  const right = new THREE.Vector3().crossVectors(frontXZ, new THREE.Vector3(0, 1, 0)).normalize();
-
-  let vx = 0, vz = 0;
-  if (isPointerLocked) {
-    if (keys['KeyW']) { vx += frontXZ.x * MOVE_SPEED * dt; vz += frontXZ.z * MOVE_SPEED * dt; }
-    if (keys['KeyS']) { vx -= frontXZ.x * MOVE_SPEED * dt; vz -= frontXZ.z * MOVE_SPEED * dt; }
-    if (keys['KeyA']) { vx -= right.x * MOVE_SPEED * dt; vz -= right.z * MOVE_SPEED * dt; }
-    if (keys['KeyD']) { vx += right.x * MOVE_SPEED * dt; vz += right.z * MOVE_SPEED * dt; }
-  }
-
-  const newX = playerPosition.x + vx;
-  if (!wouldOverlapObstacle(new THREE.Vector3(newX, playerPosition.y, playerPosition.z)))
-    playerPosition.x = newX;
-  const newZ = playerPosition.z + vz;
-  if (!wouldOverlapObstacle(new THREE.Vector3(playerPosition.x, playerPosition.y, newZ)))
-    playerPosition.z = newZ;
-
-  isMoving = vx * vx + vz * vz > 1e-6;
-
-  if (isPointerLocked && keys['Space']) {
-    const onGround = playerPosition.y <= FLOOR_Y + 0.001 && velocityY <= 0;
-    if (onGround) velocityY = JUMP_SPEED;
-  }
-
-  velocityY -= GRAVITY * dt;
-  playerPosition.y += velocityY * dt;
-
-  if (playerPosition.y < FLOOR_Y) {
-    playerPosition.y = FLOOR_Y;
-    velocityY = 0;
-  }
-
-  for (const c of OBSTACLE_CENTERS) {
-    const obs = getObstacleAABB(c);
-    const playerBox = getPlayerAABB(playerPosition);
-    if (!aabbOverlap(playerBox, obs)) continue;
-    if (velocityY <= 0) {
-      playerPosition.y = obs.max.y + PLAYER_HALF_EXTENT;
-      velocityY = 0;
-    } else {
-      playerPosition.y = Math.max(obs.min.y - PLAYER_HALF_EXTENT, FLOOR_Y);
-      velocityY = 0;
-    }
-  }
-
-  isInAir = playerPosition.y > FLOOR_Y + 0.001;
-
-  playerPosition.x = Math.max(-FLOOR_HALF_SIZE + PLAYER_HALF_EXTENT, Math.min(FLOOR_HALF_SIZE - PLAYER_HALF_EXTENT, playerPosition.x));
-  playerPosition.z = Math.max(-FLOOR_HALF_SIZE + PLAYER_HALF_EXTENT, Math.min(FLOOR_HALF_SIZE - PLAYER_HALF_EXTENT, playerPosition.z));
-
-  const rootY = playerPosition.y - 0.5;
-  character.position.set(playerPosition.x, rootY, playerPosition.z);
-  character.rotation.y = yaw;
-
-  updateCharacterAnimation(dt);
-
-  // Update projectiles
-  for (let i = projectiles.length - 1; i >= 0; i--) {
-    const p = projectiles[i];
-    p.mesh.position.addScaledVector(p.velocity, dt);
-    const pos = p.mesh.position;
-    let remove = false;
-    if (pos.distanceTo(playerPosition) > PROJECTILE_MAX_DIST) remove = true;
-    if (pos.y < -5) remove = true;
-    for (const c of OBSTACLE_CENTERS) {
-      if (aabbOverlap(getProjectileAABB(pos), getObstacleAABB(c))) {
-        remove = true;
-        break;
-      }
-    }
-    if (remove) {
-      scene.remove(p.mesh);
-      projectiles.splice(i, 1);
-    }
-  }
-
-  camera.position.copy(playerPosition).sub(front.clone().multiplyScalar(CAMERA_DISTANCE)).add(new THREE.Vector3(0, CAMERA_HEIGHT, 0));
-  camera.lookAt(playerPosition);
+// Build keys mask: W=1, S=2, A=4, D=8, Space=16
+function getKeysMask() {
+  let m = 0;
+  if (keys['KeyW']) m |= 1;
+  if (keys['KeyS']) m |= 2;
+  if (keys['KeyA']) m |= 4;
+  if (keys['KeyD']) m |= 8;
+  if (keys['Space']) m |= 16;
+  return m;
 }
 
-// --- Loop ---
-function loop() {
-  requestAnimationFrame(loop);
-  update();
+const clock = new THREE.Clock();
+
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+  if (!game_update) return;
+
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const keysMask = getKeysMask();
+  game_update(dt, keysMask, mouseDeltaX, mouseDeltaY, shootThisFrame ? 1 : 0);
+  mouseDeltaX = 0;
+  mouseDeltaY = 0;
+  shootThisFrame = false;
+
+  const px = game_get_player_position(0);
+  const py = game_get_player_position(1);
+  const pz = game_get_player_position(2);
+  const yaw = game_get_player_rotation(0);
+  const pitch = game_get_player_rotation(1);
+  const isMoving = game_get_is_moving();
+  const isInAir = game_get_is_in_air();
+  const runTime = game_get_run_time();
+
+  const rootY = py - 0.5;
+  character.position.set(px, rootY, pz);
+  character.rotation.y = yaw;
+  updateCharacterAnimation(!!isMoving, !!isInAir, runTime);
+
+  const projCount = game_get_projectile_count();
+  while (projectileMeshes.length < projCount) {
+    const mesh = new THREE.Mesh(projectileGeom, projectileMat);
+    scene.add(mesh);
+    projectileMeshes.push(mesh);
+  }
+  while (projectileMeshes.length > projCount) {
+    const mesh = projectileMeshes.pop();
+    scene.remove(mesh);
+  }
+  for (let i = 0; i < projCount; i++) {
+    const mesh = projectileMeshes[i];
+    mesh.position.set(
+      game_get_projectile(i, 0),
+      game_get_projectile(i, 1),
+      game_get_projectile(i, 2)
+    );
+  }
+
+  const frontX = game_get_front(0);
+  const frontY = game_get_front(1);
+  const frontZ = game_get_front(2);
+  camera.position.set(
+    px - frontX * CAMERA_DISTANCE,
+    py + CAMERA_HEIGHT - frontY * CAMERA_DISTANCE,
+    pz - frontZ * CAMERA_DISTANCE
+  );
+  camera.lookAt(px, py, pz);
+
+  // Update obstacle rotations (colors set once at init)
+  if (obstacleInstances && obstacleCount > 0 && getObstacleRotation) {
+    const matrix = new THREE.Matrix4();
+    for (let i = 0; i < obstacleCount; i++) {
+      const rot = getObstacleRotation(i);
+      matrix.makeRotationZ(rot);
+      matrix.setPosition(getObstacleX(i), getObstacleY(i), getObstacleZ(i));
+      obstacleInstances.setMatrixAt(i, matrix);
+    }
+    obstacleInstances.instanceMatrix.needsUpdate = true;
+  }
+
   renderer.render(scene, camera);
 }
 
-loop();
+// Load WASM and start (wasm/game.js must be loaded via a normal <script> tag so Emscripten can set scriptDirectory)
+(function () {
+  const wasmDir = 'wasm/';
+  const createGameModuleFn = typeof globalThis.createGameModule !== 'undefined' ? globalThis.createGameModule : null;
+
+  if (!createGameModuleFn) {
+    document.getElementById('instructions').textContent =
+      'WASM build not loaded. Run wasm/build.bat or build.sh first, then refresh.';
+    return;
+  }
+
+  createGameModuleFn({ locateFile: (path) => wasmDir + path })
+    .then(runWithModule)
+    .catch((err) => {
+      console.error('WASM init failed:', err);
+      document.getElementById('instructions').textContent =
+        'Failed to load game (WebAssembly). Build wasm first: run wasm/build.bat or wasm/build.sh.';
+    });
+
+  function runWithModule(Module) {
+    game_update = Module.cwrap('game_update', null, ['number', 'number', 'number', 'number', 'number']);
+    const getPlayerX = Module.cwrap('game_get_player_x', 'number', []);
+    const getPlayerY = Module.cwrap('game_get_player_y', 'number', []);
+    const getPlayerZ = Module.cwrap('game_get_player_z', 'number', []);
+    game_get_player_position = (axis) => (axis === 0 ? getPlayerX() : axis === 1 ? getPlayerY() : getPlayerZ());
+    const getPlayerYaw = Module.cwrap('game_get_player_yaw', 'number', []);
+    const getPlayerPitch = Module.cwrap('game_get_player_pitch', 'number', []);
+    game_get_player_rotation = (axis) => (axis === 0 ? getPlayerYaw() : getPlayerPitch());
+    const getFrontX = Module.cwrap('game_get_front_x', 'number', []);
+    const getFrontY = Module.cwrap('game_get_front_y', 'number', []);
+    const getFrontZ = Module.cwrap('game_get_front_z', 'number', []);
+    game_get_front = (axis) => (axis === 0 ? getFrontX() : axis === 1 ? getFrontY() : getFrontZ());
+    game_get_projectile_count = Module.cwrap('game_get_projectile_count', 'number', []);
+    const getProjectileX = Module.cwrap('game_get_projectile_x', 'number', ['number']);
+    const getProjectileY = Module.cwrap('game_get_projectile_y', 'number', ['number']);
+    const getProjectileZ = Module.cwrap('game_get_projectile_z', 'number', ['number']);
+    game_get_projectile = (i, axis) => (axis === 0 ? getProjectileX(i) : axis === 1 ? getProjectileY(i) : getProjectileZ(i));
+    game_get_is_moving = Module.cwrap('game_get_is_moving', 'number', []);
+    game_get_is_in_air = Module.cwrap('game_get_is_in_air', 'number', []);
+    game_get_run_time = Module.cwrap('game_get_run_time', 'number', []);
+    game_get_obstacle_count = Module.cwrap('game_get_obstacle_count', 'number', []);
+    getObstacleX = Module.cwrap('game_get_obstacle_x', 'number', ['number']);
+    getObstacleY = Module.cwrap('game_get_obstacle_y', 'number', ['number']);
+    getObstacleZ = Module.cwrap('game_get_obstacle_z', 'number', ['number']);
+    getObstacleRotation = Module.cwrap('game_get_obstacle_rotation', 'number', ['number']);
+    getObstacleColor = Module.cwrap('game_get_obstacle_color', 'number', ['number']);
+
+    Module.ccall('game_init', null, [], []);
+    obstacleCount = game_get_obstacle_count();
+    ensureObstacles(obstacleCount);
+    // Set initial colors
+    if (obstacleInstances && getObstacleColor) {
+      const color = new THREE.Color();
+      let sampleColor = null;
+      for (let i = 0; i < obstacleCount; i++) {
+        const colorValue = getObstacleColor(i);
+        // WASM returns unsigned int as 0xRRGGBB, ensure it's treated as unsigned
+        const hexValue = (colorValue >>> 0) & 0xFFFFFF; // Mask to 24-bit RGB
+        color.setHex(hexValue);
+        obstacleInstances.setColorAt(i, color);
+        if (i === 0) sampleColor = hexValue; // Debug: log first color
+      }
+      if (obstacleInstances.instanceColor) {
+        obstacleInstances.instanceColor.needsUpdate = true;
+      }
+      console.log('Set colors for', obstacleCount, 'cubes. Sample color:', '0x' + sampleColor.toString(16));
+    }
+    gameLoop();
+  }
+})();
