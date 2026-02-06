@@ -149,7 +149,118 @@ function updateCharacterAnimation(isMoving, isInAir, runTime) {
 const canvas = document.getElementById('canvas');
 const instructions = document.getElementById('instructions');
 
-canvas.addEventListener('click', () => canvas.requestPointerLock());
+// Mobile touch controls
+let touchControlsActive = false;
+let lastTouchX = 0, lastTouchY = 0;
+let isDraggingCamera = false;
+
+function isMobile() {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
+// Initialize mobile controls
+if (isMobile()) {
+  touchControlsActive = true;
+  const dpadUp = document.getElementById('dpadUp');
+  const dpadDown = document.getElementById('dpadDown');
+  const dpadLeft = document.getElementById('dpadLeft');
+  const dpadRight = document.getElementById('dpadRight');
+  const jumpButton = document.getElementById('jumpButton');
+  const shootButton = document.getElementById('shootButton');
+  
+  function handleTouchStart(e, key) {
+    e.preventDefault();
+    e.stopPropagation();
+    keys[key] = true;
+    e.target.classList.add('active');
+  }
+  
+  function handleTouchEnd(e, key) {
+    e.preventDefault();
+    e.stopPropagation();
+    keys[key] = false;
+    e.target.classList.remove('active');
+  }
+  
+  dpadUp.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyW'));
+  dpadUp.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyW'));
+  dpadUp.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyW'));
+  
+  dpadDown.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyS'));
+  dpadDown.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyS'));
+  dpadDown.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyS'));
+  
+  dpadLeft.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyA'));
+  dpadLeft.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyA'));
+  dpadLeft.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyA'));
+  
+  dpadRight.addEventListener('touchstart', (e) => handleTouchStart(e, 'KeyD'));
+  dpadRight.addEventListener('touchend', (e) => handleTouchEnd(e, 'KeyD'));
+  dpadRight.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'KeyD'));
+  
+  jumpButton.addEventListener('touchstart', (e) => handleTouchStart(e, 'Space'));
+  jumpButton.addEventListener('touchend', (e) => handleTouchEnd(e, 'Space'));
+  jumpButton.addEventListener('touchcancel', (e) => handleTouchEnd(e, 'Space'));
+  
+  shootButton.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    shootThisFrame = true;
+    e.target.classList.add('active');
+  });
+  shootButton.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.target.classList.remove('active');
+  });
+  shootButton.addEventListener('touchcancel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.target.classList.remove('active');
+  });
+  
+  // Camera rotation with touch drag on canvas
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      isDraggingCamera = true;
+      lastTouchX = e.touches[0].clientX;
+      lastTouchY = e.touches[0].clientY;
+      e.preventDefault();
+    }
+  }, { passive: false });
+  
+  canvas.addEventListener('touchmove', (e) => {
+    if (isDraggingCamera && e.touches.length === 1) {
+      const touch = e.touches[0];
+      mouseDeltaX += (touch.clientX - lastTouchX) * 0.5;
+      mouseDeltaY += (touch.clientY - lastTouchY) * 0.5;
+      lastTouchX = touch.clientX;
+      lastTouchY = touch.clientY;
+      e.preventDefault();
+    }
+  }, { passive: false });
+  
+  canvas.addEventListener('touchend', (e) => {
+    if (e.touches.length === 0) {
+      isDraggingCamera = false;
+    }
+    e.preventDefault();
+  }, { passive: false });
+  
+  canvas.addEventListener('touchcancel', (e) => {
+    isDraggingCamera = false;
+    e.preventDefault();
+  }, { passive: false });
+  
+  // Hide instructions on mobile
+  instructions.classList.add('hidden');
+}
+
+canvas.addEventListener('click', () => {
+  if (!touchControlsActive) {
+    canvas.requestPointerLock();
+  }
+});
 
 document.addEventListener('pointerlockchange', () => {
   isPointerLocked = document.pointerLockElement === canvas;
@@ -164,13 +275,13 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 document.addEventListener('mousemove', (e) => {
-  if (!isPointerLocked) return;
+  if (!isPointerLocked || touchControlsActive) return;
   mouseDeltaX += e.movementX;
   mouseDeltaY += e.movementY;
 });
 
 canvas.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && isPointerLocked) {
+  if (e.button === 0 && isPointerLocked && !touchControlsActive) {
     e.preventDefault();
     shootThisFrame = true;
   }
