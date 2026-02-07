@@ -32,9 +32,26 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-// Floor (500x500 to match WASM FLOOR_HALF_SIZE 250) – PlaneGeometry for correct UV mapping
-const floorGeom = new THREE.PlaneGeometry(500, 500);
-floorGeom.rotateX(-Math.PI / 2);
+// Terrain: hilly floor (500x500) with procedural height
+function makeTerrainGeometry(width, depth, segsW, segsD) {
+  const geom = new THREE.PlaneGeometry(width, depth, segsW, segsD);
+  const pos = geom.attributes.position;
+  const scale = 0.04;
+  const amp = 6;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const h =
+      amp * (0.5 * Math.sin(x * scale) * Math.cos(y * scale * 0.8) +
+             0.4 * Math.sin(x * scale * 1.3 + 1) * Math.cos(y * scale * 1.1 + 0.5) +
+             0.3 * Math.sin((x + y) * scale * 0.5));
+    pos.setZ(i, -h);
+  }
+  geom.rotateX(-Math.PI / 2);
+  geom.computeVertexNormals();
+  return geom;
+}
+const floorGeom = makeTerrainGeometry(500, 500, 80, 80);
 const floorMat = new THREE.MeshLambertMaterial({ color: 0x5a4a42 });
 const floor = new THREE.Mesh(floorGeom, floorMat);
 floor.position.set(0, 0, 0);
@@ -594,7 +611,7 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// Build keys mask: W=1, S=2, A=4, D=8, Space=16
+// Build keys mask: W=1, S=2, A=4, D=8, Space=16, Shift=32 (run)
 function getKeysMask() {
   let m = 0;
   if (keys['KeyW']) m |= 1;
@@ -602,6 +619,7 @@ function getKeysMask() {
   if (keys['KeyA']) m |= 4;
   if (keys['KeyD']) m |= 8;
   if (keys['Space']) m |= 16;
+  if (keys['ShiftLeft'] || keys['ShiftRight']) m |= 32;
   return m;
 }
 
@@ -681,7 +699,7 @@ function gameLoop() {
       for (let k = 0; k < indices.length; k++) {
         const i = indices[k];
         const rot = getObstacleRotation(i);
-        matrix.makeRotationZ(rot);
+        matrix.makeRotationY(rot);
         matrix.setPosition(getObstacleX(i), getObstacleY(i), getObstacleZ(i));
         mesh.setMatrixAt(k, matrix);
       }

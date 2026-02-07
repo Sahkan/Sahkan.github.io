@@ -49,6 +49,7 @@ Ensure `wasm/game.js` and `wasm/game.wasm` are deployed (not in `.gitignore`).
 
 - **Click** the canvas to lock the pointer and start.
 - **W / A / S / D** – Move  
+- **Shift** – Run (hold to move faster)  
 - **Mouse** – Look  
 - **Space** – Jump  
 - **Left-click** – Shoot  

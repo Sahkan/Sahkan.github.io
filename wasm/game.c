@@ -4,6 +4,7 @@
 
 /* Constants (match JS game) */
 #define MOVE_SPEED 5.f
+#define RUN_SPEED_MULTIPLIER 1.8f  /* hold Shift to run */
 #define MOUSE_SENSITIVITY 0.002f
 #define PLAYER_HALF_EXTENT 0.5f
 #define FLOOR_HALF_SIZE 250.f
@@ -24,6 +25,33 @@
 #define OBSTACLE_SPHERE_RADIUS 0.5f
 #define OBSTACLE_TRIANGLE_HALF_Y 0.25f
 #define OBSTACLE_PLACEMENT_GAP 0.25f  /* min distance between obstacle surfaces */
+
+/* Terrain height = world Y of surface. JS plane: vertex (x, y, -h) -> after rotateX(-90) -> (x, -h, -y), so world (x, z) = (x, -y) and world Y = -h(x, -z). */
+#define TERRAIN_SCALE 0.04f
+#define TERRAIN_AMP 6.f
+#define TERRAIN_OBSTACLE_CLEARANCE 0.01f  /* minimal lift so obstacles sit on terrain, not float */
+static float terrain_height(float x, float z) {
+  float plane_y = -z; /* world Z = -plane Y */
+  float h = TERRAIN_AMP * (
+    0.5f * sinf(x * TERRAIN_SCALE) * cosf(plane_y * TERRAIN_SCALE * 0.8f) +
+    0.4f * sinf(x * TERRAIN_SCALE * 1.3f + 1.f) * cosf(plane_y * TERRAIN_SCALE * 1.1f + 0.5f) +
+    0.3f * sinf((x + plane_y) * TERRAIN_SCALE * 0.5f));
+  return -h; /* world Y = -h */
+}
+/* Max terrain height under an obstacle's footprint (3x3 grid to catch peaks on bumpy terrain) */
+static float terrain_height_under_footprint(float x, float z, float half_ext) {
+  float max_y = terrain_height(x, z);
+  float step = half_ext; /* 3x3 grid over full footprint: -half_ext, 0, +half_ext */
+  for (int ix = -1; ix <= 1; ix++) {
+    for (int iz = -1; iz <= 1; iz++) {
+      float sx = x + (float)ix * step;
+      float sz = z + (float)iz * step;
+      float ty = terrain_height(sx, sz);
+      if (ty > max_y) max_y = ty;
+    }
+  }
+  return max_y + TERRAIN_OBSTACLE_CLEARANCE;
+}
 
 typedef struct { float x, y, z; } Vec3;
 typedef struct { float x, y, z, vx, vy, vz; } Projectile;
@@ -176,7 +204,10 @@ static int would_overlap_obstacle(float px, float py, float pz) {
 }
 
 void game_init(void) {
-  vec3_set(&player_position, 0.f, 0.5f, 3.f);
+  float px = 0.f, pz = 3.f;
+  player_position.x = px;
+  player_position.z = pz;
+  player_position.y = terrain_height(px, pz) + PLAYER_HALF_EXTENT;
   yaw = 0.f;
   pitch = 0.f;
   velocity_y = 0.f;
@@ -205,9 +236,17 @@ void game_init(void) {
         float dx = x - 0.f, dz = z - 3.f;
         if (dx * dx + dz * dz < spawn_radius_sq) { attempts++; continue; }
         obstacle_centers[n].x = x;
-        obstacle_centers[n].y = 0.5f;
         obstacle_centers[n].z = z;
         obstacle_types[n] = (unsigned char)(rng_next() % 3); /* 0=cube, 1=sphere, 2=triangle */
+        /* Place obstacle so entire base clears terrain (sample under footprint to avoid clipping) */
+        {
+          float bottom_y = terrain_height_under_footprint(x, z, OBSTACLE_HALF_EXTENT);
+          int t = (int)obstacle_types[n];
+          if (t == OBSTACLE_TYPE_TRIANGLE)
+            obstacle_centers[n].y = bottom_y + OBSTACLE_TRIANGLE_HALF_Y;
+          else
+            obstacle_centers[n].y = bottom_y + OBSTACLE_HALF_EXTENT; /* cube or sphere */
+        }
         if (!would_new_obstacle_touch_others(n)) break; /* gap OK */
         attempts++;
       }
@@ -252,11 +291,12 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
   Vec3 right = { -front_xz.z, 0.f, front_xz.x };
   vec3_normalize(&right);
 
+  float move_speed = (keys & 32) ? (MOVE_SPEED * RUN_SPEED_MULTIPLIER) : MOVE_SPEED; /* Shift = run */
   float vx = 0.f, vz = 0.f;
-  if (keys & 1)  { vx += front_xz.x * MOVE_SPEED * dt; vz += front_xz.z * MOVE_SPEED * dt; } /* W */
-  if (keys & 2)  { vx -= front_xz.x * MOVE_SPEED * dt; vz -= front_xz.z * MOVE_SPEED * dt; } /* S */
-  if (keys & 4)  { vx -= right.x * MOVE_SPEED * dt; vz -= right.z * MOVE_SPEED * dt; }       /* A */
-  if (keys & 8)  { vx += right.x * MOVE_SPEED * dt; vz += right.z * MOVE_SPEED * dt; }       /* D */
+  if (keys & 1)  { vx += front_xz.x * move_speed * dt; vz += front_xz.z * move_speed * dt; } /* W */
+  if (keys & 2)  { vx -= front_xz.x * move_speed * dt; vz -= front_xz.z * move_speed * dt; } /* S */
+  if (keys & 4)  { vx -= right.x * move_speed * dt; vz -= right.z * move_speed * dt; }       /* A */
+  if (keys & 8)  { vx += right.x * move_speed * dt; vz += right.z * move_speed * dt; }       /* D */
 
   float new_x = player_position.x + vx;
   if (!would_overlap_obstacle(new_x, player_position.y, player_position.z))
@@ -267,15 +307,18 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
 
   is_moving = (vx * vx + vz * vz > 1e-6f);
 
+  float floor_y = terrain_height(player_position.x, player_position.z);
+  float player_feet = floor_y + PLAYER_HALF_EXTENT;
+
   /* Jump */
-  if ((keys & 16) && player_position.y <= FLOOR_Y + 0.001f && velocity_y <= 0.f)
+  if ((keys & 16) && player_position.y <= player_feet + 0.001f && velocity_y <= 0.f)
     velocity_y = JUMP_SPEED;
 
   velocity_y -= GRAVITY * dt;
   player_position.y += velocity_y * dt;
 
-  if (player_position.y < FLOOR_Y) {
-    player_position.y = FLOOR_Y;
+  if (player_position.y < player_feet) {
+    player_position.y = player_feet;
     velocity_y = 0.f;
   }
 
@@ -306,13 +349,13 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
       player_position.y = o_top + h;
       velocity_y = 0.f;
     } else {
-      float land = (o_bottom - h) > FLOOR_Y ? (o_bottom - h) : FLOOR_Y;
-      player_position.y = land;
+      float land = (o_bottom - h) > floor_y ? (o_bottom - h) : floor_y;
+      player_position.y = land + h;
       velocity_y = 0.f;
     }
   }
 
-  is_in_air = (player_position.y > FLOOR_Y + 0.001f);
+  is_in_air = (player_position.y > player_feet + 0.001f);
 
   /* Clamp to floor bounds */
   float margin = FLOOR_HALF_SIZE - PLAYER_HALF_EXTENT;
@@ -347,11 +390,11 @@ void game_update(float dt, unsigned int keys, float mouse_dx, float mouse_dy, in
     if (p->y < -10.f) remove = 1; // Remove if too far below floor
     
     float pr = PROJECTILE_RADIUS;
-    float floor_top = 0.25f; // Floor top surface (floor center Y is -0.25, half height 0.25, so top is 0)
+    float floor_top = terrain_height(p->x, p->z);
     
-    // Floor collision and bounce
+    /* Floor (terrain) collision and bounce */
     if (p->y - pr < floor_top) {
-      p->y = floor_top + pr; // Move projectile above floor
+      p->y = floor_top + pr;
       p->vy = -p->vy * PROJECTILE_BOUNCE_COEFFICIENT; // Bounce with energy loss
       // Small friction on floor
       p->vx *= 0.95f;
