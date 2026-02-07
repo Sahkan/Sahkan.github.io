@@ -379,14 +379,15 @@ if (shouldShowJoystick()) {
   }
   
   joystick.addEventListener('touchstart', (e) => {
-    if (joystickTouchId === null) {
+    if (joystickTouchId === null && e.changedTouches.length > 0) {
+      const touch = e.changedTouches[0]; // the touch that just hit this joystick (not touches[0] when 2 fingers down)
       e.preventDefault();
       e.stopPropagation();
-      joystickTouchId = e.touches[0].identifier;
+      joystickTouchId = touch.identifier;
       joystickActive = true;
       joystickStick.classList.add('active');
       updateJoystickBounds();
-      updateJoystickPosition(e.touches[0].clientX, e.touches[0].clientY);
+      updateJoystickPosition(touch.clientX, touch.clientY);
     }
   }, { passive: false });
   
@@ -413,10 +414,13 @@ if (shouldShowJoystick()) {
   }, { passive: false });
   
   joystick.addEventListener('touchcancel', (e) => {
-    if (joystickTouchId !== null) {
-      e.preventDefault();
-      e.stopPropagation();
-      resetJoystick();
+    if (joystickTouchId !== null && e.changedTouches.length > 0) {
+      const cancelled = Array.from(e.changedTouches).find(t => t.identifier === joystickTouchId);
+      if (cancelled) {
+        e.preventDefault();
+        e.stopPropagation();
+        resetJoystick();
+      }
     }
   }, { passive: false });
 
@@ -452,14 +456,15 @@ if (shouldShowJoystick()) {
   window.addEventListener('resize', updateLookJoystickBounds);
 
   lookJoystick.addEventListener('touchstart', (e) => {
-    if (lookJoystickTouchId === null) {
+    if (lookJoystickTouchId === null && e.changedTouches.length > 0) {
+      const touch = e.changedTouches[0]; // the touch that just hit this joystick
       e.preventDefault();
       e.stopPropagation();
-      lookJoystickTouchId = e.touches[0].identifier;
+      lookJoystickTouchId = touch.identifier;
       lookJoystickActive = true;
       lookJoystickStick.classList.add('active');
       updateLookJoystickBounds();
-      updateLookJoystickPosition(e.touches[0].clientX, e.touches[0].clientY);
+      updateLookJoystickPosition(touch.clientX, touch.clientY);
     }
   }, { passive: false });
   lookJoystick.addEventListener('touchmove', (e) => {
@@ -482,9 +487,13 @@ if (shouldShowJoystick()) {
       }
     }
   }, { passive: false });
-  lookJoystick.addEventListener('touchcancel', () => {
-    if (lookJoystickTouchId !== null) {
-      resetLookJoystick();
+  lookJoystick.addEventListener('touchcancel', (e) => {
+    if (lookJoystickTouchId !== null && e.changedTouches.length > 0) {
+      const cancelled = Array.from(e.changedTouches).find(t => t.identifier === lookJoystickTouchId);
+      if (cancelled) {
+        e.preventDefault();
+        resetLookJoystick();
+      }
     }
   }, { passive: false });
 
