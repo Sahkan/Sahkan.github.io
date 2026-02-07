@@ -284,6 +284,13 @@ let joystickTouchId = null;
 let joystickCenterX = 0, joystickCenterY = 0;
 let joystickRadius = 0;
 let joystickX = 0, joystickY = 0;
+// Look joystick (right side)
+let lookJoystickActive = false;
+let lookJoystickTouchId = null;
+let lookJoystickCenterX = 0, lookJoystickCenterY = 0;
+let lookJoystickRadius = 0;
+let lookJoystickX = 0, lookJoystickY = 0; // -1 to 1 normalized
+const LOOK_JOYSTICK_SENSITIVITY = 800; // scales look joystick to mouse-delta-like input per second
 
 function isMobile() {
   return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
@@ -302,6 +309,8 @@ if (shouldShowJoystick()) {
   }
   const joystick = document.getElementById('joystick');
   const joystickStick = document.getElementById('joystickStick');
+  const lookJoystick = document.getElementById('lookJoystick');
+  const lookJoystickStick = document.getElementById('lookJoystickStick');
   const jumpButton = document.getElementById('jumpButton');
   const shootButton = document.getElementById('shootButton');
   
@@ -410,6 +419,97 @@ if (shouldShowJoystick()) {
       resetJoystick();
     }
   }, { passive: false });
+
+  // Look joystick bounds and position
+  function updateLookJoystickBounds() {
+    const rect = lookJoystick.getBoundingClientRect();
+    lookJoystickCenterX = rect.left + rect.width / 2;
+    lookJoystickCenterY = rect.top + rect.height / 2;
+    lookJoystickRadius = rect.width / 2 - 25;
+  }
+  function updateLookJoystickPosition(clientX, clientY) {
+    const dx = clientX - lookJoystickCenterX;
+    const dy = clientY - lookJoystickCenterY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    let px = dx, py = dy;
+    if (distance > lookJoystickRadius) {
+      px = (dx / distance) * lookJoystickRadius;
+      py = (dy / distance) * lookJoystickRadius;
+    }
+    lookJoystickX = lookJoystickRadius > 0 ? px / lookJoystickRadius : 0;
+    lookJoystickY = lookJoystickRadius > 0 ? py / lookJoystickRadius : 0;
+    lookJoystickStick.style.transform = `translate(calc(-50% + ${px}px), calc(-50% + ${py}px))`;
+  }
+  function resetLookJoystick() {
+    lookJoystickX = 0;
+    lookJoystickY = 0;
+    lookJoystickStick.style.transform = 'translate(-50%, -50%)';
+    lookJoystickStick.classList.remove('active');
+    lookJoystickActive = false;
+    lookJoystickTouchId = null;
+  }
+  updateLookJoystickBounds();
+  window.addEventListener('resize', updateLookJoystickBounds);
+
+  lookJoystick.addEventListener('touchstart', (e) => {
+    if (lookJoystickTouchId === null) {
+      e.preventDefault();
+      e.stopPropagation();
+      lookJoystickTouchId = e.touches[0].identifier;
+      lookJoystickActive = true;
+      lookJoystickStick.classList.add('active');
+      updateLookJoystickBounds();
+      updateLookJoystickPosition(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  }, { passive: false });
+  lookJoystick.addEventListener('touchmove', (e) => {
+    if (lookJoystickActive && lookJoystickTouchId !== null) {
+      const touch = Array.from(e.touches).find(t => t.identifier === lookJoystickTouchId);
+      if (touch) {
+        e.preventDefault();
+        e.stopPropagation();
+        updateLookJoystickPosition(touch.clientX, touch.clientY);
+      }
+    }
+  }, { passive: false });
+  lookJoystick.addEventListener('touchend', (e) => {
+    if (lookJoystickTouchId !== null) {
+      const touch = Array.from(e.changedTouches).find(t => t.identifier === lookJoystickTouchId);
+      if (touch) {
+        e.preventDefault();
+        e.stopPropagation();
+        resetLookJoystick();
+      }
+    }
+  }, { passive: false });
+  lookJoystick.addEventListener('touchcancel', () => {
+    if (lookJoystickTouchId !== null) {
+      resetLookJoystick();
+    }
+  }, { passive: false });
+
+  if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
+    lookJoystick.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        lookJoystickActive = true;
+        lookJoystickStick.classList.add('active');
+        updateLookJoystickBounds();
+        updateLookJoystickPosition(e.clientX, e.clientY);
+      }
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (lookJoystickActive) {
+        updateLookJoystickPosition(e.clientX, e.clientY);
+      }
+    });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0 && lookJoystickActive) {
+        resetLookJoystick();
+      }
+    });
+  }
   
   // Mouse handlers for PC testing
   if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
@@ -503,15 +603,17 @@ if (shouldShowJoystick()) {
     });
   }
   
-  // Camera rotation with touch drag on canvas (only if not touching joystick)
+  // Camera rotation with touch drag on canvas (only if not touching joysticks)
   canvas.addEventListener('touchstart', (e) => {
-    // Check if touch is on joystick area
     const joystickRect = joystick.getBoundingClientRect();
+    const lookRect = lookJoystick.getBoundingClientRect();
     const touch = e.touches[0];
-    const isOnJoystick = touch.clientX >= joystickRect.left && touch.clientX <= joystickRect.right &&
-                         touch.clientY >= joystickRect.top && touch.clientY <= joystickRect.bottom;
+    const isOnMoveJoystick = touch.clientX >= joystickRect.left && touch.clientX <= joystickRect.right &&
+                             touch.clientY >= joystickRect.top && touch.clientY <= joystickRect.bottom;
+    const isOnLookJoystick = touch.clientX >= lookRect.left && touch.clientX <= lookRect.right &&
+                             touch.clientY >= lookRect.top && touch.clientY <= lookRect.bottom;
     
-    if (!isOnJoystick && e.touches.length === 1) {
+    if (!isOnMoveJoystick && !isOnLookJoystick && e.touches.length === 1) {
       isDraggingCamera = true;
       lastTouchX = touch.clientX;
       lastTouchY = touch.clientY;
@@ -519,15 +621,18 @@ if (shouldShowJoystick()) {
     }
   }, { passive: false });
   
-  // Mouse camera drag for PC (only if not using joystick)
+  // Mouse camera drag for PC (only if not using joysticks)
   if (ENABLE_JOYSTICK_ON_PC && !isMobile()) {
     canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0 && !joystickActive) { // Left mouse button, not dragging joystick
+      if (e.button === 0 && !joystickActive && !lookJoystickActive) {
         const joystickRect = joystick.getBoundingClientRect();
-        const isOnJoystick = e.clientX >= joystickRect.left && e.clientX <= joystickRect.right &&
-                             e.clientY >= joystickRect.top && e.clientY <= joystickRect.bottom;
+        const lookRect = lookJoystick.getBoundingClientRect();
+        const isOnMoveJoystick = e.clientX >= joystickRect.left && e.clientX <= joystickRect.right &&
+                                 e.clientY >= joystickRect.top && e.clientY <= joystickRect.bottom;
+        const isOnLookJoystick = e.clientX >= lookRect.left && e.clientX <= lookRect.right &&
+                                 e.clientY >= lookRect.top && e.clientY <= lookRect.bottom;
         
-        if (!isOnJoystick) {
+        if (!isOnMoveJoystick && !isOnLookJoystick) {
           isDraggingCamera = true;
           lastTouchX = e.clientX;
           lastTouchY = e.clientY;
@@ -631,6 +736,12 @@ function gameLoop() {
 
   const dt = Math.min(clock.getDelta(), 0.1);
   const keysMask = getKeysMask();
+  
+  // Look joystick adds to mouse delta (right-stick look)
+  if (lookJoystickActive && (lookJoystickX !== 0 || lookJoystickY !== 0)) {
+    mouseDeltaX += lookJoystickX * LOOK_JOYSTICK_SENSITIVITY * dt;
+    mouseDeltaY += lookJoystickY * LOOK_JOYSTICK_SENSITIVITY * dt;
+  }
   
   // Handle automatic shooting with cooldown
   let shouldShoot = false;

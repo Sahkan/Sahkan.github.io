@@ -111,6 +111,31 @@
     #shootButton.active {
       background: rgba(255, 100, 100, 0.8);
     }
+    
+    /* Look joystick (right side, for camera) */
+    .joystick-look {
+      position: fixed;
+      left: auto;
+      bottom: auto;
+      top: 50%;
+      right: 20px;
+      transform: translateY(-50%);
+      width: 120px;
+      height: 120px;
+      z-index: 100;
+      touch-action: none;
+    }
+    .joystick-look .joystick-base {
+      background: rgba(200, 180, 255, 0.2);
+      border-color: rgba(200, 180, 255, 0.5);
+    }
+    .joystick-look .joystick-stick {
+      background: rgba(200, 180, 255, 0.6);
+      border-color: rgba(200, 180, 255, 0.8);
+    }
+    .joystick-look .joystick-stick.active {
+      background: rgba(200, 180, 255, 0.9);
+    }
   </style>
 </head>
 <body>
@@ -121,6 +146,11 @@
     <div class="joystick" id="joystick">
       <div class="joystick-base">
         <div class="joystick-stick" id="joystickStick"></div>
+      </div>
+    </div>
+    <div class="joystick joystick-look" id="lookJoystick">
+      <div class="joystick-base">
+        <div class="joystick-stick" id="lookJoystickStick"></div>
       </div>
     </div>
     <div id="jumpButton">⤴</div>
