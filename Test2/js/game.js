@@ -1,4 +1,4 @@
-// 2D Side-Scrolling Shooter Game
+// 2D Side-Scrolling Shooter Game - WebAssembly Interface
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
@@ -7,55 +7,22 @@ const ctx = canvas.getContext('2d');
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// Game state
-const player = {
-  x: 100,
-  y: canvas.height / 2,
-  width: 40,
-  height: 40,
-  speed: 5,
-  angle: 0
-};
-
-const bullets = [];
-const enemies = [];
-const particles = [];
-
 // Input state
 const keys = {};
 let mouseX = 0;
 let mouseY = 0;
 let isShooting = false;
-let shootCooldown = 0;
-const SHOOT_COOLDOWN = 0.1; // seconds between shots
+
+// WASM module and wrappers (set after load)
+let game_init, game_update;
+let game_get_player_x, game_get_player_y, game_get_player_angle;
+let game_get_bullet_count, game_get_bullet_x, game_get_bullet_y;
+let game_get_enemy_count, game_get_enemy_x, game_get_enemy_y, game_get_enemy_width, game_get_enemy_height, game_get_enemy_rotation, game_get_enemy_color;
+let game_get_particle_count, game_get_particle_x, game_get_particle_y, game_get_particle_vx, game_get_particle_vy, game_get_particle_life, game_get_particle_size, game_get_particle_color;
 
 // Background scroll
 let backgroundX = 0;
 const BACKGROUND_SPEED = 1;
-
-// Initialize
-function init() {
-  // Create initial enemies
-  for (let i = 0; i < 100000; i++) {
-    spawnEnemy();
-  }
-}
-
-function spawnEnemy() {
-  const size = 15 + Math.random() * 30; // Random size between 15 and 45
-  const hue = Math.random() * 360; // Random hue for color
-  enemies.push({
-    x: canvas.width + Math.random() * 50000, // Spread across a much wider area
-    y: Math.random() * canvas.height,
-    width: size,
-    height: size,
-    speed: 2 + Math.random() * 2,
-    health: 1,
-    color: `hsl(${hue}, 70%, 50%)`, // Random color using HSL
-    rotation: Math.random() * Math.PI * 2, // Random initial rotation
-    rotationSpeed: (Math.random() - 0.5) * 0.1 // Random rotation speed
-  });
-}
 
 // Input handlers
 document.addEventListener('keydown', (e) => {
@@ -87,120 +54,33 @@ canvas.addEventListener('mouseup', (e) => {
 window.addEventListener('resize', () => {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
-  player.y = Math.min(player.y, canvas.height - player.height);
 });
 
-// Update game state
+// Build keys mask: W=1, S=2, A=4, D=8
+function getKeysMask() {
+  let m = 0;
+  if (keys['KeyW'] || keys['Keyw']) m |= 1;
+  if (keys['KeyS'] || keys['Keys']) m |= 2;
+  if (keys['KeyA'] || keys['Keya']) m |= 4;
+  if (keys['KeyD'] || keys['Keyd']) m |= 8;
+  return m;
+}
+
+// Convert RGB color (0xRRGGBB) to CSS color string
+function rgbToColor(rgb) {
+  const r = (rgb >> 16) & 0xFF;
+  const g = (rgb >> 8) & 0xFF;
+  const b = rgb & 0xFF;
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+// Update game state (calls WASM)
 function update(deltaTime) {
-  // Player movement
-  if (keys['KeyW'] || keys['Keyw']) {
-    player.y = Math.max(0, player.y - player.speed);
-  }
-  if (keys['KeyS'] || keys['Keys']) {
-    player.y = Math.min(canvas.height - player.height, player.y + player.speed);
-  }
-  if (keys['KeyA'] || keys['Keya']) {
-    player.x = Math.max(0, player.x - player.speed);
-  }
-  if (keys['KeyD'] || keys['Keyd']) {
-    player.x = Math.min(canvas.width - player.width, player.x + player.speed);
-  }
-
-  // Calculate angle to mouse
-  const dx = mouseX - (player.x + player.width / 2);
-  const dy = mouseY - (player.y + player.height / 2);
-  player.angle = Math.atan2(dy, dx);
-
-  // Shooting
-  shootCooldown -= deltaTime;
-  if (isShooting && shootCooldown <= 0) {
-    shootCooldown = SHOOT_COOLDOWN;
-    const bulletSpeed = 10;
-    bullets.push({
-      x: player.x + player.width / 2,
-      y: player.y + player.height / 2,
-      vx: Math.cos(player.angle) * bulletSpeed,
-      vy: Math.sin(player.angle) * bulletSpeed,
-      radius: 5,
-      life: 2 // seconds
-    });
-  }
-
-  // Update bullets
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const bullet = bullets[i];
-    bullet.x += bullet.vx;
-    bullet.y += bullet.vy;
-    bullet.life -= deltaTime;
-
-    // Remove bullets that are off screen or expired
-    if (bullet.life <= 0 || 
-        bullet.x < 0 || bullet.x > canvas.width ||
-        bullet.y < 0 || bullet.y > canvas.height) {
-      bullets.splice(i, 1);
-      continue;
-    }
-
-    // Check collision with enemies
-    for (let j = enemies.length - 1; j >= 0; j--) {
-      const enemy = enemies[j];
-      const dist = Math.sqrt(
-        Math.pow(bullet.x - (enemy.x + enemy.width / 2), 2) +
-        Math.pow(bullet.y - (enemy.y + enemy.height / 2), 2)
-      );
-      
-      if (dist < bullet.radius + Math.max(enemy.width, enemy.height) / 2) {
-        // Hit!
-        enemies.splice(j, 1);
-        bullets.splice(i, 1);
-        
-        // Create explosion particles
-        for (let k = 0; k < 8; k++) {
-          particles.push({
-            x: enemy.x + enemy.width / 2,
-            y: enemy.y + enemy.height / 2,
-            vx: (Math.random() - 0.5) * 4,
-            vy: (Math.random() - 0.5) * 4,
-            life: 0.5,
-            size: 3 + Math.random() * 3,
-            color: enemy.color // Use enemy's color for particles
-          });
-        }
-        
-        // Spawn new enemy
-        spawnEnemy();
-        break;
-      }
-    }
-  }
-
-  // Update enemies
-  for (let i = enemies.length - 1; i >= 0; i--) {
-    const enemy = enemies[i];
-    enemy.x -= enemy.speed;
-    enemy.rotation += enemy.rotationSpeed; // Rotate enemy
-    
-    // Remove enemies that are off screen
-    if (enemy.x + enemy.width < 0) {
-      enemies.splice(i, 1);
-      spawnEnemy();
-    }
-  }
-
-  // Update particles
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const particle = particles[i];
-    particle.x += particle.vx;
-    particle.y += particle.vy;
-    particle.life -= deltaTime;
-    particle.vx *= 0.98;
-    particle.vy *= 0.98;
-    
-    if (particle.life <= 0) {
-      particles.splice(i, 1);
-    }
-  }
-
+  if (!game_update) return;
+  
+  const keysMask = getKeysMask();
+  game_update(deltaTime, keysMask, mouseX, mouseY, isShooting ? 1 : 0, canvas.width, canvas.height);
+  
   // Scroll background
   backgroundX -= BACKGROUND_SPEED;
   if (backgroundX <= -canvas.width) {
@@ -210,6 +90,8 @@ function update(deltaTime) {
 
 // Render game
 function render() {
+  if (!game_get_player_x) return;
+  
   // Clear canvas
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -236,23 +118,38 @@ function render() {
     ctx.stroke();
   }
 
-  // Draw enemies
-  for (const enemy of enemies) {
+  // Draw enemies (only those visible on screen for performance)
+  const enemyCount = game_get_enemy_count();
+  const margin = 100; // Extra margin for enemies slightly off-screen
+  for (let i = 0; i < enemyCount; i++) {
+    const x = game_get_enemy_x(i);
+    const y = game_get_enemy_y(i);
+    const width = game_get_enemy_width(i);
+    const height = game_get_enemy_height(i);
+    
+    // Viewport culling - skip enemies outside visible area
+    if (x + width < -margin || x > canvas.width + margin ||
+        y + height < -margin || y > canvas.height + margin) {
+      continue;
+    }
+    
+    const rotation = game_get_enemy_rotation(i);
+    const color = game_get_enemy_color(i);
+    
     ctx.save();
-    // Move to enemy center for rotation
-    const centerX = enemy.x + enemy.width / 2;
-    const centerY = enemy.y + enemy.height / 2;
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
     ctx.translate(centerX, centerY);
-    ctx.rotate(enemy.rotation);
+    ctx.rotate(rotation);
     
-    // Draw enemy body with random color
-    ctx.fillStyle = enemy.color;
-    ctx.fillRect(-enemy.width / 2, -enemy.height / 2, enemy.width, enemy.height);
+    // Draw enemy body
+    ctx.fillStyle = rgbToColor(color);
+    ctx.fillRect(-width / 2, -height / 2, width, height);
     
-    // Draw enemy "eyes" (scaled to enemy size)
-    const eyeSize = Math.max(3, enemy.width / 8);
-    const eyeOffsetX = enemy.width / 4;
-    const eyeOffsetY = -enemy.height / 4;
+    // Draw enemy "eyes"
+    const eyeSize = Math.max(3, width / 8);
+    const eyeOffsetX = width / 4;
+    const eyeOffsetY = -height / 4;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(-eyeOffsetX - eyeSize / 2, eyeOffsetY - eyeSize / 2, eyeSize, eyeSize);
     ctx.fillRect(eyeOffsetX - eyeSize / 2, eyeOffsetY - eyeSize / 2, eyeSize, eyeSize);
@@ -262,38 +159,50 @@ function render() {
 
   // Draw bullets
   ctx.fillStyle = '#ffff00';
-  for (const bullet of bullets) {
+  const bulletCount = game_get_bullet_count();
+  for (let i = 0; i < bulletCount; i++) {
+    const x = game_get_bullet_x(i);
+    const y = game_get_bullet_y(i);
     ctx.beginPath();
-    ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2);
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fill();
   }
 
   // Draw particles
-  for (const particle of particles) {
-    const alpha = particle.life / 0.5;
+  const particleCount = game_get_particle_count();
+  for (let i = 0; i < particleCount; i++) {
+    const x = game_get_particle_x(i);
+    const y = game_get_particle_y(i);
+    const life = game_get_particle_life(i);
+    const size = game_get_particle_size(i);
+    const color = game_get_particle_color(i);
+    
+    const alpha = life / 0.5;
     ctx.save();
     ctx.globalAlpha = alpha;
-    if (particle.color) {
-      ctx.fillStyle = particle.color;
-    } else {
-      ctx.fillStyle = '#ffc800'; // Default yellow
-    }
+    ctx.fillStyle = rgbToColor(color);
     ctx.beginPath();
-    ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+    ctx.arc(x, y, size, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
   // Draw player
+  const playerX = game_get_player_x();
+  const playerY = game_get_player_y();
+  const playerAngle = game_get_player_angle();
+  const playerWidth = 40;
+  const playerHeight = 40;
+  
   ctx.save();
-  ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
-  ctx.rotate(player.angle);
+  ctx.translate(playerX + playerWidth / 2, playerY + playerHeight / 2);
+  ctx.rotate(playerAngle);
   ctx.fillStyle = '#5999ff';
-  ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height);
+  ctx.fillRect(-playerWidth / 2, -playerHeight / 2, playerWidth, playerHeight);
   
   // Draw gun barrel
   ctx.fillStyle = '#333333';
-  ctx.fillRect(player.width / 2 - 5, -3, 15, 6);
+  ctx.fillRect(playerWidth / 2 - 5, -3, 15, 6);
   ctx.restore();
 
   // Draw crosshair at mouse position
@@ -319,6 +228,55 @@ function gameLoop(currentTime) {
   requestAnimationFrame(gameLoop);
 }
 
-// Start game
-init();
-gameLoop(0);
+// Load WASM and start
+(function () {
+  const wasmDir = 'wasm/';
+  const createGameModuleFn = typeof globalThis.createGameModule !== 'undefined' ? globalThis.createGameModule : null;
+
+  if (!createGameModuleFn) {
+    document.getElementById('instructions').textContent =
+      'WASM build not loaded. Run wasm/build.bat or build.sh first, then refresh.';
+    return;
+  }
+
+  createGameModuleFn({ locateFile: (path) => wasmDir + path })
+    .then(runWithModule)
+    .catch((err) => {
+      console.error('WASM init failed:', err);
+      document.getElementById('instructions').textContent =
+        'Failed to load game (WebAssembly). Build wasm first: run wasm/build.bat or wasm/build.sh.';
+    });
+
+  function runWithModule(Module) {
+    game_init = Module.cwrap('game_init', null, []);
+    game_update = Module.cwrap('game_update', null, ['number', 'number', 'number', 'number', 'number', 'number', 'number']);
+    
+    game_get_player_x = Module.cwrap('game_get_player_x', 'number', []);
+    game_get_player_y = Module.cwrap('game_get_player_y', 'number', []);
+    game_get_player_angle = Module.cwrap('game_get_player_angle', 'number', []);
+    
+    game_get_bullet_count = Module.cwrap('game_get_bullet_count', 'number', []);
+    game_get_bullet_x = Module.cwrap('game_get_bullet_x', 'number', ['number']);
+    game_get_bullet_y = Module.cwrap('game_get_bullet_y', 'number', ['number']);
+    
+    game_get_enemy_count = Module.cwrap('game_get_enemy_count', 'number', []);
+    game_get_enemy_x = Module.cwrap('game_get_enemy_x', 'number', ['number']);
+    game_get_enemy_y = Module.cwrap('game_get_enemy_y', 'number', ['number']);
+    game_get_enemy_width = Module.cwrap('game_get_enemy_width', 'number', ['number']);
+    game_get_enemy_height = Module.cwrap('game_get_enemy_height', 'number', ['number']);
+    game_get_enemy_rotation = Module.cwrap('game_get_enemy_rotation', 'number', ['number']);
+    game_get_enemy_color = Module.cwrap('game_get_enemy_color', 'number', ['number']);
+    
+    game_get_particle_count = Module.cwrap('game_get_particle_count', 'number', []);
+    game_get_particle_x = Module.cwrap('game_get_particle_x', 'number', ['number']);
+    game_get_particle_y = Module.cwrap('game_get_particle_y', 'number', ['number']);
+    game_get_particle_vx = Module.cwrap('game_get_particle_vx', 'number', ['number']);
+    game_get_particle_vy = Module.cwrap('game_get_particle_vy', 'number', ['number']);
+    game_get_particle_life = Module.cwrap('game_get_particle_life', 'number', ['number']);
+    game_get_particle_size = Module.cwrap('game_get_particle_size', 'number', ['number']);
+    game_get_particle_color = Module.cwrap('game_get_particle_color', 'number', ['number']);
+
+    game_init();
+    gameLoop(0);
+  }
+})();
